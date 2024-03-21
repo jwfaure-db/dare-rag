@@ -1,269 +1,233 @@
 # Databricks notebook source
-# MAGIC %md 
-# MAGIC ### A cluster has been created for this demo
-# MAGIC To run this demo, just select the cluster `dbdemos-llm-rag-chatbot-josh_faure` from the dropdown menu ([open cluster configuration](https://dbc-7fdc927a-14d5.cloud.databricks.com/#setting/clusters/1008-093508-si7gptxw/configuration)). <br />
-# MAGIC *Note: If the cluster was deleted after 30 days, you can re-create it with `dbdemos.create_cluster('llm-rag-chatbot')` or re-install the demo: `dbdemos.install('llm-rag-chatbot')`*
+# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.344 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==1.10.9 mlflow==2.9.0
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
-# MAGIC
-# MAGIC # 1/ Data preparation for LLM Chatbot RAG
-# MAGIC
-# MAGIC ## Building our knowledge base and preparing our documents for Databricks Vector Search
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-data-prep.png?raw=true" style="float: right; width: 800px; margin-left: 10px">
-# MAGIC
-# MAGIC In this notebook, we'll prepare data for our Vector Search Index.
-# MAGIC
-# MAGIC Preparing high quality data is key for your chatbot performance. We recommend taking time implementing this with your own dataset.
-# MAGIC
-# MAGIC For this example, we will use Databricks documentation from [docs.databricks.com](docs.databricks.com):
-# MAGIC - Download the web pages
-# MAGIC - Split the pages in small chunks
-# MAGIC - Extract the text from the HTML content
-# MAGIC
-# MAGIC Thankfully, Lakehouse AI not only provides state of the art solutions to accelerate your AI and LLM projects, but also to accelerate data ingestion and preparation at scale.
-# MAGIC
-# MAGIC *Note: While some processing in this notebook is specific to our dataset (exmple: splitting chunks around `h2` elements), **we strongly recommend getting familiar with the overall process and replicate that on your own dataset**.*
-
-# COMMAND ----------
-
-# DBTITLE 1,Install required external libraries 
-# installing a Python library to help us extract data out of HTML and XML files
-# installing a tokenizer library 
-%pip install beautifulsoup4==4.11.1 transformers==4.30.2
-
-# COMMAND ----------
-
-# MAGIC %run ./_resources/00-init $catalog=dbdemos $db=chatbot $reset_all_data=false
-
-# COMMAND ----------
-
-# MAGIC %md-sandbox
-# MAGIC ## Extracting Databricks documentation sitemap and pages
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-data-prep-1.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
-# MAGIC
-# MAGIC First, let's create our raw dataset as a Delta Lake table.
-# MAGIC
-# MAGIC For this demo, we will directly download a few documentation pages from `docs.databricks.com` and save the HTML content.
-# MAGIC
-# MAGIC Here are the main steps:
-# MAGIC
-# MAGIC - Run a quick script to extract the page URLs from the `sitemap.xml` file
-# MAGIC - Download the web pages
-# MAGIC - Use BeautifulSoup to extract the ArticleBody
-# MAGIC - Save the result in a Delta Lake table
-# MAGIC
-# MAGIC *Note: for faster execution time, we will only download ~100 pages. Make sure you use these pages to ask questions to your model and see RAG in action!*
-
-# COMMAND ----------
-
-# DBTITLE 1,Extract the pages url from the sitemap.xml file
-import requests
-import xml.etree.ElementTree as ET
-
-# Fetch the XML content from sitemap
-response = requests.get("https://raw.githubusercontent.com/databricks-demos/dbdemos-dataset/main/llm/databricks-documentation/sitemap.xml")
-root = ET.fromstring(response.content)
-# Find all 'loc' elements (URLs) in the XML
-urls = [loc.text for loc in root.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc")]
-print(f"{len(urls)} Databricks documentation pages found")
-
-#Let's take only the first 100 documentation pages to make this demo faster:
-urls = urls[:100]
-
-# COMMAND ----------
-
-# DBTITLE 1,Download Databricks Documentation HTML pages as Raw Delta Lake table
-# Download the web page (see _resource for the download_web_page function)
-with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-    results = list(executor.map(download_web_page, urls))
-
-# Filter out None values (URLs that couldn't be fetched or didn't have the specified div)
-valid_results = [result for result in results if result is not None]
-
-#Save the content in a raw table
-if not spark.catalog.tableExists("raw_documentation") or spark.table('raw_documentation').count() < len(valid_results):
-    spark.createDataFrame(valid_results).write.mode('overwrite').saveAsTable('raw_documentation')
-    spark.sql("ALTER TABLE raw_documentation SET OWNER TO `account users`;")
-display(spark.table('raw_documentation').limit(2))
+# MAGIC %run ./helper_code/00-init-advanced $reset_all_data=false
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE TABLE IF NOT EXISTS databricks_documentation  (id BIGINT GENERATED BY DEFAULT AS IDENTITY, url STRING, content STRING, title STRING);
-# MAGIC ALTER TABLE databricks_documentation SET OWNER TO `account users`;
+# MAGIC CREATE EXTERNAL VOLUME pdf_volume
+# MAGIC LOCATION 's3://workshop-bucket-{AWS_ACCOUNT_ID}/documents';
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
-# MAGIC
-# MAGIC ### Splitting documentation pages into small chunks
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-data-prep-2.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
-# MAGIC
-# MAGIC LLM models typically have a maximum input context length, and you won't be able to compute embbeddings for very long texts.
-# MAGIC In addition, the longer your context length is, the longer inference will take.
-# MAGIC
-# MAGIC Document preparation is key for your model to perform well, and multiple strategies exist depending on your dataset:
-# MAGIC
-# MAGIC - Split document in small chunks (paragraph, h2...)
-# MAGIC - Truncate documents to a fixed length
-# MAGIC - The chunk size depends of your content and how you'll be using it to craft your prompt. Adding multiple small doc chunks in your prompt might give different results than sending only a big one.
-# MAGIC - Split into big chunks and ask a model to summarize each chunk as a one-off job, for faster live inference.
-# MAGIC
-# MAGIC ### LLM Window size and Tokenizer
-# MAGIC
-# MAGIC The same sentence might return different tokens for different models. LLMs are shipped with a `Tokenizer` that you can use to count how many tokens will be created for a given sequence (usually more than the number of words) (see [Hugging Face documentation](https://huggingface.co/docs/transformers/main/tokenizer_summary) or [OpenAI](https://github.com/openai/tiktoken))
-# MAGIC
-# MAGIC Make sure the tokenizer and context size limit you'll be using here matches your embedding model. To do so, we'll be using the `transformers` library to count llama2 tokens with its tokenizer.
+volume_folder =  f"/Volumes/{catalog}/{db}/pdf_volume"
+upload_pdfs_to_volume(volume_folder + "/llm_papers")
+display(dbutils.fs.ls(volume_folder + "/llm_papers"))
 
 # COMMAND ----------
 
-# DBTITLE 1,Counting our tokens using llama2 transformers
-from transformers import LlamaTokenizerFast
+df = (spark.readStream
+        .format('cloudFiles')
+        .option('cloudFiles.format', 'BINARYFILE')
+        .load('dbfs:'+volume_folder + '/llm_papers'))
 
-#load Llama2 tokenizer
-tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
-
-#Truncate the given text to the number of token.
-def truncate(text, tokenizer, max_tokens = 4000):
-    # Tokenize the text to get the tokens
-    tokens = tokenizer.encode(text)
-    if len(tokens) <= max_tokens:
-        return text
-    # Truncate the tokens to the desired max_tokens
-    truncated_tokens = tokens[:max_tokens]
-    return tokenizer.decode(truncated_tokens, skip_special_tokens = True)
-    
-#Let's try counting tokens  
-sentence = "Hello, How are you? We are building an api for a chatbot."
-
-token_count = len(tokenizer.encode(sentence))
-print(f"This sentence has {token_count} tokens")
-truncated_sentence = truncate(sentence, tokenizer, max_tokens = 10)
-print(f"truncated to 10 tokens: {truncated_sentence}")  
+#### Write the data as a Delta table
+(df.writeStream
+  .trigger(availableNow=True)
+  .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/raw_docs')
+  .table('pdf_raw').awaitTermination())
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
-# MAGIC ### Splitting our big documentation page in smaller chunks (h2 sections)
-# MAGIC
-# MAGIC In this demo, we have a few big documentation articles, which are too big for our models. We'll split these articles between HTML `h2` tags, and ensure that each chunk isn't bigger than 4000 tokens (using the truncate function we just created).
-# MAGIC
-# MAGIC Let's also remove the HTML tags to send plain text to our model.
-# MAGIC <br/><br/>
-# MAGIC
-# MAGIC <div style="background-color: #def2ff; padding: 15px;  border-radius: 30px; ">
-# MAGIC   <strong>Information</strong><br/>
-# MAGIC   The following steps are specific to our dataset. You don't have to go into the implementation details, but remember that this is a critical step depending on your dataset structure.
-# MAGIC </div>
+# MAGIC %sql 
+# MAGIC SELECT * FROM pdf_raw LIMIT 2
 
 # COMMAND ----------
 
-from bs4 import BeautifulSoup
-
-# Remove multiple line breaks and truncate the model
-def cleanup_and_truncate_text(text, tokenizer, max_tokens = 4000):
-    return truncate(re.sub(r'\n{3,}', '\n\n', text).strip(), tokenizer, max_tokens)
-    
-#Split the text in chunk between 1000 and 4000 tokens
-#This considers that our sections between H2 are of decent size (not > 4000 tokens), which is the case with our corpus. 
-#H2 Sections longer than 4000 will be truncated.
-def split_html_by_h2(soup, html_content, tokenizer, max_tokens = 4000, min_chunk_size = 1000):
-    chunks = []
-    last_index = 0
-    for element in soup.find_all(['h2']):
-        h2_position = html_content.find(str(element))
-        chunk = html_content[last_index:h2_position]
-        chunk_text = BeautifulSoup(chunk).get_text()
-        # Split on the next H2 only if we have more than half the max. 
-        # This prevents from having too small chunks
-        if len(tokenizer.encode(chunk_text)) > max_tokens/2:
-            last_index = h2_position
-            chunks.append(cleanup_and_truncate_text(chunk_text, tokenizer, max_tokens))
-    #Append the last chunk
-    chunk = html_content[last_index:]
-    chunk_text = BeautifulSoup(chunk).get_text()
-    if len(tokenizer.encode(chunk_text)) > min_chunk_size:
-        chunks.append(cleanup_and_truncate_text(chunk_text, tokenizer, max_tokens))
-    return chunks
-  
-#Let's try to split our doc between h2:
-doc = """<h1>This is a title</h1>
-<h2>Subtitle 1</h2>
-Some description 1
-<h2>Subtitle 2</h2>
-And description 2"""
-
-#This text will be split in 2 parts, and the split is at an h2 element
-for split in split_html_by_h2(BeautifulSoup(doc), doc, tokenizer, max_tokens=20, min_chunk_size=3):
-    print("------------ CHUNK ------------")
-    print(split)
+install_ocr_on_nodes()
 
 # COMMAND ----------
 
-# MAGIC %md 
-# MAGIC Let's now split our entire dataset using this function using a pandas UDF.
-# MAGIC
-# MAGIC We will also extract the title from the page (based on the `h1` tag)
+from unstructured.partition.auto import partition
+import re
+
+def extract_doc_text(x : bytes) -> str:
+  #### Read files and extract the values with unstructured
+  sections = partition(file=io.BytesIO(x))
+  def clean_section(txt):
+    txt = re.sub(r'\n', '', txt)
+    return re.sub(r' ?\.', '.', txt)
+  #### Default split is by section of document, concatenate them all together because we want to split by sentence instead.
+  return "\n".join([clean_section(s.text) for s in sections]) 
 
 # COMMAND ----------
 
-
-#Count number of tokens, if we exceed our limit will try to split it based on h2, or truncate it if no h2 exists.
-def split_text(text, tokenizer, max_tokens = 4000, min_chunk_size = 100):
-    soup = BeautifulSoup(text)
-    txt = soup.get_text()
-    token_count = len(tokenizer.encode(txt))
-    if token_count > max_tokens:
-        return split_html_by_h2(soup, text, tokenizer, max_tokens, min_chunk_size)
-    else:
-        return [re.sub(r'\n{3,}', '\n\n', txt).strip()]
-
-#transform the html as text chunks. Will cut to 4000 tokens
-@pandas_udf("array<string>")
-def extract_chunks(iterator: Iterator[pd.Series]) -> Iterator[pd.Series]:
-    # Load the model tokenizer
-    tokenizer = LlamaTokenizerFast.from_pretrained("hf-internal-testing/llama-tokenizer")
-    for serie in iterator:
-        # get a summary for each row
-        yield serie.apply(lambda x: split_text(x, tokenizer, max_tokens = 4000, min_chunk_size = 100))
-        
-
-@pandas_udf("string")
-def clean_html(serie):
-    return serie.apply(lambda x: BeautifulSoup(x).get_text())
-
-df = (spark.table('raw_documentation')
-        # Define the regular expression pattern (we could also have used soup)
-        .withColumn("title", F.regexp_extract(col("text"), "<h1>(.*?)<\/h1>", 1))
-        .withColumn("title", clean_html(col("title")))
-        .withColumn('content', extract_chunks(col('text')))
-        .drop('text'))
-#Explode as we'll have multiple chunks per page
-df = df.withColumn('content', F.explode('content'))
-#Save back the results to our final table
-#Note that we only do it if the table is empty, because it'll trigger an full indexation and we want to avoid this
-if not spark.catalog.tableExists(f"{catalog}.{db}.databricks_documentation") or spark.table("databricks_documentation").count() < 50:
-  df.write.mode('overwrite').saveAsTable('databricks_documentation')
-
-# COMMAND ----------
-
-display(spark.table("databricks_documentation"))
+import io
+import re
+with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true') as pdf:
+  doc = extract_doc_text(pdf.content)  
+  print(doc)
 
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Chunking
+
+# COMMAND ----------
+
+from llama_index.langchain_helpers.text_splitter import SentenceSplitter
+from llama_index import Document, set_global_tokenizer
+from transformers import AutoTokenizer
+
+spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+@pandas_udf("array<string>")
+def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
+    #set llama2 as tokenizer to match our model size (will stay below BGE 1024 limit)
+    set_global_tokenizer(
+      AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+    )
+    #Sentence splitter from llama_index to split on sentences
+    splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
+    def extract_and_split(b):
+      txt = extract_doc_text(b)
+      nodes = splitter.get_nodes_from_documents([Document(text=txt)])
+      return [n.text for n in nodes]
+
+    for x in batch_iter:
+        yield x.apply(extract_and_split)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Deploying your embeddings foundation model
 # MAGIC
-# MAGIC ## Our dataset is now ready! Let's create our Vector Search Index.
-# MAGIC
-# MAGIC Our dataset is now ready, and saved as a Delta Lake table.
-# MAGIC
-# MAGIC We could easily deploy this part as a production-grade job, leveraging Delta Live Table capabilities to incrementally consume and cleanup document updates.
-# MAGIC
-# MAGIC Remember, this is the real power of the Lakehouse: one unified platform for data preparation, analysis and AI.
-# MAGIC
-# MAGIC Next: Open the [02-Creating-Vector-Index]($./02-Creating-Vector-Index) notebook and create our embedding endpoint and index.
+
+# COMMAND ----------
+
+from mlflow.deployments import get_deploy_client
+
+#### bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
+deploy_client = get_deploy_client("databricks")
+
+embeddings = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": ["What is Apache Spark?"]})
+pprint(embeddings)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Creating a new Delta Table for vector embeddings
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC --Note that we need to enable Change Data Feed on the table to create the index
+# MAGIC CREATE TABLE IF NOT EXISTS llm_pdf_documentation (
+# MAGIC   id BIGINT GENERATED BY DEFAULT AS IDENTITY,
+# MAGIC   url STRING,
+# MAGIC   content STRING,
+# MAGIC   embedding ARRAY <FLOAT>
+# MAGIC ) TBLPROPERTIES (delta.enableChangeDataFeed = true); 
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Processing and storing vector embeddings
+
+# COMMAND ----------
+
+@pandas_udf("array<float>")
+def get_embedding(contents: pd.Series) -> pd.Series:
+    import mlflow.deployments
+    deploy_client = mlflow.deployments.get_deploy_client("databricks")
+    def get_embeddings(batch):
+        #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+        response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": batch})
+        return [e['embedding'] for e in response.data]
+
+    # Splitting the contents into batches of 150 items each, since the embedding model takes at most 150 inputs per request.
+    max_batch_size = 150
+    batches = [contents.iloc[i:i + max_batch_size] for i in range(0, len(contents), max_batch_size)]
+
+    # Process each batch and collect the results
+    all_embeddings = []
+    for batch in batches:
+        all_embeddings += get_embeddings(batch.tolist())
+
+    return pd.Series(all_embeddings)
+
+# COMMAND ----------
+
+(spark.readStream.table('pdf_raw')
+      .withColumn("content", F.explode(read_as_chunk("content")))
+      .withColumn("embedding", get_embedding("content"))
+      .selectExpr('path as url', 'content', 'embedding')
+  .writeStream
+    .trigger(availableNow=True)
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk')
+    .table('llm_pdf_documentation').awaitTermination())
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM llm_pdf_documentation WHERE url like '%.pdf' limit 10
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Create Vector Search Index for your Delta Table
+
+# COMMAND ----------
+
+from databricks.vector_search.client import VectorSearchClient
+vsc = VectorSearchClient()
+
+if VECTOR_SEARCH_ENDPOINT_NAME not in [e['name'] for e in vsc.list_endpoints()['endpoints']]:
+    vsc.create_endpoint(name=VECTOR_SEARCH_ENDPOINT_NAME, endpoint_type="STANDARD")
+
+wait_for_vs_endpoint_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME)
+print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
+
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+import databricks.sdk.service.catalog as c
+
+#The table we'd like to index
+source_table_fullname = f"{catalog}.{db}.llm_pdf_documentation"
+#### Where we want to store our index
+vs_index_fullname = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
+
+if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
+  print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
+  vsc.create_delta_sync_index(
+    endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
+    index_name=vs_index_fullname,
+    source_table_name=source_table_fullname,
+    pipeline_type="TRIGGERED", #Sync needs to be manually triggered
+    primary_key="id",
+    embedding_dimension=1024, #Match your model embedding size
+    embedding_vector_column="embedding"
+  )
+else:
+  #Trigger a sync to update our vs content with the new data saved in the table
+  vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).sync()
+
+#Let's wait for the index to be ready and all our embeddings to be created and indexed
+wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Search for similar content
+
+# COMMAND ----------
+
+question = "How can I track billing usage on my workspaces?"
+
+response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
+embeddings = [e['embedding'] for e in response.data]
+
+results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
+  query_vector=embeddings[0],
+  columns=["url", "content"],
+  num_results=1)
+docs = results.get('result', {}).get('data_array', [])
+pprint(docs)
+
