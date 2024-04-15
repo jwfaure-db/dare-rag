@@ -1,23 +1,19 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
-# MAGIC # Deploying our Chat Model and enabling Online Evaluation Monitoring
+# MAGIC # Deploy your model with inference tables
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-0.png?raw=true" style="float: right" width="900px">
-# MAGIC
-# MAGIC
-# MAGIC
-# MAGIC Let's now deploy our model as an endpoint to be able to send real-time queries.
-# MAGIC
-# MAGIC Once our model is live, we will need to monitor its behavior to detect potential anomaly and drift over time. 
-# MAGIC
-# MAGIC We won't be able to measure correctness as we don't have a ground truth, but we can track model perplexity and other metrics like profesionalism over time.
-# MAGIC
-# MAGIC This can easily be done by turning on your Model Endpoint Inference table, automatically saving every query input and output as one of your Delta Lake tables.
+# MAGIC ## Getting started
+# MAGIC To get started, install Python libraries, and restart the kernel to use updated packages.
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-sdk==0.12.0 mlflow==2.9.0
+# MAGIC %pip install databricks-sdk==0.18.0 mlflow==2.10.1
 # MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Let's run the init notebook, which imports helpers for the lab.
 
 # COMMAND ----------
 
@@ -30,11 +26,9 @@
 # MAGIC
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-1.png?raw=true" style="float: right" width="900px">
 # MAGIC
-# MAGIC Let's start by deploying our model endpoint.
+# MAGIC Let's start deploying your model serving endpoint.
 # MAGIC
-# MAGIC Simply define the `auto_capture_config` parameter during the deployment (or through the UI) to define the table where the endpoint request payload will automatically be saved.
-# MAGIC
-# MAGIC Databricks will fill the table for you in the background, as a fully managed service.
+# MAGIC 1. Let's first import some pre-requisite libraries.
 
 # COMMAND ----------
 
@@ -43,6 +37,14 @@ import json
 import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC 2. Let's configure the variables for the model to deploy.
+# MAGIC
+# MAGIC Enable inference tables on model serving endpoints for monitoring and debugging
+# MAGIC The auto_capture_config parameter defines the table where the endpoint request payload will automatically be saved. Databricks will fill the table for you in the background, as a fully managed service.
 
 # COMMAND ----------
 
@@ -63,6 +65,14 @@ auto_capture_config = {
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC 3. Now, you're ready to deploy your model.
+# MAGIC
+# MAGIC **Please be patient.**
+# MAGIC **It may take up to 15 to 30 minutes for Databricks to deploy your model.**
+
+# COMMAND ----------
+
 w = WorkspaceClient()
 serving_client = EndpointApiClient()
 
@@ -70,6 +80,11 @@ serving_client = EndpointApiClient()
 serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version = version, workload_size="Small", scale_to_zero_enabled=True, wait_start = True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
 
 displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/ml/endpoints/{serving_endpoint_name}">Model Serving Endpoint page</a> for more details.')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Once deployed, let's try sending a query to your chatbot.
 
 # COMMAND ----------
 
@@ -83,17 +98,3 @@ df_split = DataframeSplitInput(columns=["messages"],
                                                     ]}]])
 w = WorkspaceClient()
 w.serving_endpoints.query(serving_endpoint_name, dataframe_split=df_split)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC
-# MAGIC ### Let's give it a try, using Gradio as UI!
-# MAGIC
-# MAGIC All you now have to do is deploy your chatbot UI. Here is a simple example using Gradio ([License](https://github.com/gradio-app/gradio/blob/main/LICENSE)). Explore the chatbot gradio [implementation](https://huggingface.co/spaces/databricks-demos/chatbot/blob/main/app.py).
-# MAGIC
-# MAGIC *Note: this UI is hosted and maintained by Databricks for demo purpose and is not intended for production use. We'll soon show you how to do that with Lakehouse Apps!*
-
-# COMMAND ----------
-
-display_gradio_app("databricks-demos-chatbot")
