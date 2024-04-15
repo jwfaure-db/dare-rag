@@ -20,7 +20,8 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.9.0 lxml==4.9.3 langchain==0.0.344 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.12.0 cloudpickle==2.2.1 pydantic==1.10.9
+# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 langchain==0.1.5 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.18.0 cloudpickle==2.2.1 pydantic==2.5.2
+# MAGIC %pip install pip mlflow[databricks]==2.10.1
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -31,20 +32,20 @@
 
 # MAGIC %md 
 # MAGIC ## Exploring Langchain capabilities
-# MAGIC
-# MAGIC Let's start with the basics and send a query to a Databricks Foundation Model using LangChain.
+# MAGIC ### Basics of LangChain
+# MAGIC We'll use PromptTemplate  and send a query to Databricks  Foundation Model API using LangChain.
 
 # COMMAND ----------
 
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatDatabricks
+from langchain_community.chat_models import ChatDatabricks
 from langchain.schema.output_parser import StrOutputParser
 
 prompt = PromptTemplate(
   input_variables = ["question"],
   template = "You are an assistant. Give a short answer to this question: {question}"
 )
-chat_model = ChatDatabricks(endpoint="databricks-llama-2-70b-chat", max_tokens = 500)
+chat_model = ChatDatabricks(endpoint="databricks-dbrx-instruct", max_tokens = 500)
 
 chain = (
   prompt
@@ -56,7 +57,9 @@ print(chain.invoke({"question": "What is Spark?"}))
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ## Adding conversation history to the prompt 
+# MAGIC ### Adding conversation history to the prompt 
+# MAGIC
+# MAGIC Now, we enhance our prompt by including conversation history along with the question. When invoking, we pass the conversation history as a list, specifying whether each message was sent by a user or the assistant. For example:
 
 # COMMAND ----------
 
@@ -121,9 +124,8 @@ print(chain_with_history.invoke({
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ## Let's add a filter on top to only answer Databricks-related questions.
-# MAGIC
-# MAGIC We want our chatbot to be profesionnal and only answer questions related to Databricks. Let's create a small chain and add a first classification step. 
+# MAGIC ### Filtering for questions on a specific topic
+# MAGIC Our chatbot should be professional and only answer questions related to a specific topic, for example, Databricks-related questions. One approach is to create a is_question_about_databricks_prompt prompt template for a classification step.
 # MAGIC
 # MAGIC *Note: this is a fairly naive implementation, another solution could be adding a small classification model based on the question embedding, providing faster classification*
 
@@ -152,7 +154,14 @@ is_question_about_databricks_prompt = PromptTemplate(
 
 # COMMAND ----------
 
-chat_model = ChatDatabricks(endpoint="databricks-llama-2-70b-chat", max_tokens = 200)
+# MAGIC %md
+# MAGIC Now, we define the LLM that we use, and create our simple chain. This chain will execute multiple steps: extract question and chat history, classify the question to determine relevance, and finally parse the output a user-friendly format.
+# MAGIC
+# MAGIC
+
+# COMMAND ----------
+
+chat_model = ChatDatabricks(endpoint="databricks-dbrx-instruct", max_tokens = 500)
 
 is_about_llm_chain = (
     {
@@ -166,6 +175,11 @@ is_about_llm_chain = (
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Let's test our chain with a question which matches the desired topic, Databricks.
+
+# COMMAND ----------
+
 #Returns "Yes" as this is about LLMs: 
 print(is_about_llm_chain.invoke({
     "messages": [
@@ -174,6 +188,11 @@ print(is_about_llm_chain.invoke({
         {"role": "user", "content": "Does it support streaming?"}
     ]
 }))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, we'll test our chain with a question which is **not** about the desired topic.
 
 # COMMAND ----------
 
@@ -202,11 +221,21 @@ print(is_about_llm_chain.invoke({
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Let's test if our secrets and permissions are properly setup. In a new cell, run the following code to test the same.
+
+# COMMAND ----------
+
 index_name=f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 
 #Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
 test_demo_permissions(host, secret_scope=scope_name, secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, let's add a retriever to the chain. This retriever is responsible for finding the most relevant documents to our prompt. In a new cell, run the following code.
 
 # COMMAND ----------
 
@@ -246,11 +275,10 @@ print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Improve document search using LLM to generate a better sentence for the vector store, based on the chat history
+# MAGIC ### Improving our document retrieval process
+# MAGIC We need to retrieve documents related the the last question but also the conversation history.
 # MAGIC
-# MAGIC We need to retrieve documents related the the last question but also the history.
-# MAGIC
-# MAGIC One solution is to add a step for our LLM to summarize the history and the last question, making it a better fit for our vector search query. Let's do that as a new step in our chain:
+# MAGIC One solution is to add a step for our LLM to summarize the history and the last question, making it a better fit for our vector search query. Let's do that as a new step in our chain.
 
 # COMMAND ----------
 
@@ -283,6 +311,11 @@ generate_query_to_retrieve_context_chain = (
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Let's test our new chain.
+
+# COMMAND ----------
+
 output = generate_query_to_retrieve_context_chain.invoke({
     "messages": [
         {"role": "user", "content": "What is Apache Spark?"}
@@ -302,7 +335,7 @@ print(f"Test retriever question, summarized with history: {output}")
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## Let's put it together
+# MAGIC ## Merging the retriever with LangChain chain
 # MAGIC
 # MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-2.png?raw=true" style="float: right" width="600px">
 # MAGIC
@@ -391,7 +424,7 @@ full_chain = (
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC Let's try our full chain:
+# MAGIC Let's try our full chain. Let's start by asking an out-of-scope question. In a new cell, run the following code.
 
 # COMMAND ----------
 
@@ -410,6 +443,11 @@ display_chat(non_relevant_dialog["messages"], response)
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Now, let's ask a relevant question. In a new cell, run the following code.
+
+# COMMAND ----------
+
 # DBTITLE 1,Asking a relevant question
 dialog = {
     "messages": [
@@ -425,11 +463,20 @@ display_chat(dialog["messages"], response)
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ## Register the chatbot model to Unity Catalog
+# MAGIC ### Register the chatbot model to Unity Catalog
+# MAGIC
+# MAGIC Databricks provides a fully-managed ML lifecycle management using MLFlow , an open source platform for managing the end-to-end machine learning lifecycle including tracking experiments, model deployment and registry, and model serving.
+# MAGIC
+# MAGIC In a new cell, run the following code.
 
 # COMMAND ----------
 
 init_experiment_for_batch("chatbot-rag-llm-advanced", "simple")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC In the next cell, run the following code:
 
 # COMMAND ----------
 
@@ -463,12 +510,17 @@ with mlflow.start_run(run_name="chatbot_rag") as run:
 
 # COMMAND ----------
 
-# MAGIC %md Let's try loading our model
+# MAGIC %md Let's try loading our model. In a new cell, run the following code:
 
 # COMMAND ----------
 
 model = mlflow.langchain.load_model(model_info.model_uri)
 model.invoke(dialog)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, let's register our model. In a new cell, run the following code:
 
 # COMMAND ----------
 
@@ -482,8 +534,4 @@ client.set_registered_model_alias(name=model_name, alias="prod", version=model_v
 # MAGIC
 # MAGIC ## Conclusion
 # MAGIC
-# MAGIC We've seen how we can improve our chatbot, adding more advanced capabilities to handle a chat history.
-# MAGIC
-# MAGIC As you add capabilities to your model and tune the prompt, it will get harder to evaluate your model performance in a repeatable way.
-# MAGIC
-# MAGIC Your new prompt might work well for what you tried to fixed, but could also have impact on other questions.
+# MAGIC In this Lab, you learned how to improve a chatbot, adding capabilities such as handling conversation history and retrieval using vector search. As you add even more capabilities and tune your prompts, it may become more difficult to evaluate your model performance in a repeatable way. Your new prompt may work well for what you tried to fix, but could also have impact on other questions.
