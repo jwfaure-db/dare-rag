@@ -9,9 +9,40 @@
 
 # COMMAND ----------
 
-aws_account_id = "905790255208"
+# AWS CONFIGURATION FROM CLOUDFORMATION
+S3_LOCATION = "s3://{Fill in your S3 Bucket}"
+aws_account_id = "{Fill in your aws account ID from your AWS CloudFormation output}"
+aws_access_key = "{Get your aws access key from your AWS CloudFormation output}"
+aws_secret_access_key = "{Get your aws secret access key from your AWS CloudFormation output}"
+
+# DATABRICKS CONFIGURATION
+access_token = "{Generate Access Token by following instructions in Lab 1 Set up}"
+catalog = "{Fill in your catalog name}"
+# catalog = "catalog_" + aws_account_id
 dbName = db = "default"
-catalog = "catalog_" + aws_account_id
 scope_name = "scope_" + aws_account_id
-DOCS_S3_LOCATION = "s3://workshop-bucket-" + aws_account_id + "/documents"
-VECTOR_SEARCH_ENDPOINT_NAME = "vs-endpoint-demo"
+workspace_url = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+
+
+# MODEL ENDPOINT CONFIGURATION
+embeddings_model_endpoint_name = "embeddings_" + aws_account_id
+bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
+VECTOR_SEARCH_ENDPOINT_NAME = "{instructor to provide vector search endpoint name for workshop}"
+VECTOR_SEARCH_INDEX_NAME = f"{catalog}.{
+    db}.llm_pdf_documentation_self_managed_vs_index"
+
+# COMMAND ----------
+
+# MAGIC %run ./00-create-secrets
+
+# COMMAND ----------
+
+scopes = dbutils.secrets.listScopes()
+if scope_name not in [scope.name for scope in scopes]:
+    create_scope(scope_name, access_token, workspace_url)
+    create_secret("rag_sp_token", access_token,
+                  scope_name, access_token, workspace_url)
+    create_secret("aws_access_key_id", aws_access_key,
+                  scope_name, access_token, workspace_url)
+    create_secret("aws_secret_access_key", aws_secret_access_key,
+                  scope_name, access_token, workspace_url)
