@@ -42,7 +42,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Exploring Amazon BedRock - Claude 3 Sonnet Model
+# MAGIC ### Exploring Amazon Bedrock - Claude 3 Sonnet Model
 
 # COMMAND ----------
 

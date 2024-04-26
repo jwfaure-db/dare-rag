@@ -53,7 +53,7 @@ spark.conf.set("spark.sql.conf.bucket", S3_LOCATION + "/documents")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE EXTERNAL VOLUME pdf_volume
+# MAGIC CREATE EXTERNAL VOLUME IF NOT EXISTS pdf_volume
 # MAGIC LOCATION '${spark.sql.conf.bucket}';
 
 # COMMAND ----------
@@ -64,7 +64,7 @@ spark.conf.set("spark.sql.conf.bucket", S3_LOCATION + "/documents")
 # COMMAND ----------
 
 volume_folder = f"/Volumes/{catalog}/{db}/pdf_volume"
-if len(dbutils.fs.ls(volume_folder + "/llm_papers")) == 0:
+if len(dbutils.fs.ls(volume_folder)) == 0:
     upload_pdfs_to_volume(volume_folder + "/llm_papers")
 display(dbutils.fs.ls(volume_folder + "/llm_papers"))
 
@@ -349,14 +349,13 @@ print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
 # The table we'd like to index
 source_table_fullname = f"{catalog}.{db}.llm_pdf_documentation"
 # Where we want to store our index
-vs_index_fullname = VECTOR_SEARCH_INDEX_NAME
+vs_index_fullname = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
 
-if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, VECTOR_SEARCH_INDEX_NAME):
-    print(f"Creating index {VECTOR_SEARCH_INDEX_NAME} on endpoint {
-          VECTOR_SEARCH_ENDPOINT_NAME}...")
+if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
+    print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
     vsc.create_delta_sync_index(
         endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
-        index_name=VECTOR_SEARCH_INDEX_NAME,
+        index_name=vs_index_fullname,
         source_table_name=source_table_fullname,
         pipeline_type="TRIGGERED",  # Sync needs to be manually triggered
         primary_key="id",
@@ -366,11 +365,11 @@ if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, VECTOR_SEARCH_INDEX_NAME):
 else:
     # Trigger a sync to update our vs content with the new data saved in the table
     print("Index exists, triggering sync between Delta Table and Vector Index")
-    vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, VECTOR_SEARCH_INDEX_NAME).sync()
+    vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).sync()
 
 # Let's wait for the index to be ready and all our embeddings to be created and indexed
 wait_for_index_to_be_ready(
-    vsc, VECTOR_SEARCH_ENDPOINT_NAME, VECTOR_SEARCH_INDEX_NAME)
+    vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
 
 # COMMAND ----------
@@ -389,7 +388,7 @@ response = deploy_client.predict(
     endpoint="databricks-bge-large-en", inputs={"input": [question]})
 embeddings = [e['embedding'] for e in response.data]
 
-results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, VECTOR_SEARCH_INDEX_NAME).similarity_search(
+results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
     query_vector=embeddings[0],
     columns=["url", "content"],
     num_results=1)
@@ -422,9 +421,9 @@ if embeddings_model_endpoint_name not in [endpoints['name'] for endpoints in dep
                 {
                     "external_model": {
                         "name": "titan-embed-g1-text-02",
-                        "provider": "aws-bedrock",
+                        "provider": "amazon-bedrock",
                         "task": "llm/v1/embeddings",
-                        "aws_bedrock_config": {
+                        "amazon_bedrock_config": {
                             "aws_region": "us-west-2",
                             "aws_access_key_id": "{{secrets/" + scope_name + "/aws_access_key_id}}",
                             "aws_secret_access_key": "{{secrets/" + scope_name + "/aws_secret_access_key}}",
@@ -534,12 +533,10 @@ def get_titan_embedding(contents: pd.Series) -> pd.Series:
 # The table we'd like to index
 source_table_fullname = f"{catalog}.{db}.titan_llm_pdf_documentation"
 # Where we want to store our index
-vs_index_fullname = f"{catalog}.{
-    db}.titan_llm_pdf_documentation_self_managed_vs_index"
+vs_index_fullname = f"{catalog}.{db}.titan_llm_pdf_documentation_self_managed_vs_index"
 
 if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
-    print(f"Creating index {vs_index_fullname} on endpoint {
-          VECTOR_SEARCH_ENDPOINT_NAME}...")
+    print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
     vsc.create_delta_sync_index(
         endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
         index_name=vs_index_fullname,

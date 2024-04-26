@@ -84,11 +84,9 @@ w = WorkspaceClient()
 serving_client = EndpointApiClient()
 
 # Start the endpoint using the REST API (you can do it using the UI directly)
-serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version=version, workload_size="Small",
-                                             scale_to_zero_enabled=True, wait_start=True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
+serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version=version, workload_size="Small",scale_to_zero_enabled=True, wait_start=True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
 
-displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/ml/endpoints/{
-            serving_endpoint_name}">Model Serving Endpoint page</a> for more details.')
+displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/ml/endpoints/{serving_endpoint_name}">Model Serving Endpoint page</a> for more details.')
 
 # COMMAND ----------
 

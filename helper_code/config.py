@@ -28,7 +28,6 @@ workspace_url = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 embeddings_model_endpoint_name = "embeddings_" + aws_account_id
 bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
 VECTOR_SEARCH_ENDPOINT_NAME = "{instructor to provide vector search endpoint name for workshop}"
-VECTOR_SEARCH_INDEX_NAME = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
 
 # COMMAND ----------
 
