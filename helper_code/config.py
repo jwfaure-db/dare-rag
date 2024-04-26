@@ -11,13 +11,13 @@
 
 # AWS CONFIGURATION FROM CLOUDFORMATION
 S3_LOCATION = "s3://{Fill in your S3 Bucket}"
-aws_account_id = "{Fill in your aws account ID from your AWS CloudFormation output}"
-aws_access_key = "{Get your aws access key from your AWS CloudFormation output}"
-aws_secret_access_key = "{Get your aws secret access key from your AWS CloudFormation output}"
+aws_account_id = "{Fill in your aws account ID from your Event Outputs / AWS CloudFormation output}"
+aws_access_key = "{Fill in aws access key from Event Outputs / AWS CloudFormation output}"
+aws_secret_access_key = "{Fill in aws secret access key from your Event Outputs / AWS CloudFormation output}"
 
 # DATABRICKS CONFIGURATION
-access_token = "{Generate Access Token by following instructions in Lab 1 Set up}"
-catalog = "{Fill in your catalog name}"
+access_token = "{Fill in Databricks Personal Access Token you generated}"
+catalog = "{Fill in name of the catalog that you created in Account Setup}"
 # catalog = "catalog_" + aws_account_id
 dbName = db = "default"
 scope_name = "scope_" + aws_account_id
@@ -28,8 +28,7 @@ workspace_url = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 embeddings_model_endpoint_name = "embeddings_" + aws_account_id
 bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
 VECTOR_SEARCH_ENDPOINT_NAME = "{instructor to provide vector search endpoint name for workshop}"
-VECTOR_SEARCH_INDEX_NAME = f"{catalog}.{
-    db}.llm_pdf_documentation_self_managed_vs_index"
+VECTOR_SEARCH_INDEX_NAME = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
 
 # COMMAND ----------
 
