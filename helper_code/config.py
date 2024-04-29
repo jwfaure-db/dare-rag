@@ -1,10 +1,4 @@
 # Databricks notebook source
-# MAGIC %md
-# MAGIC ## Configuration file
-# MAGIC
-# MAGIC
-# MAGIC <!-- Collect usage data (view). Remove it to disable collection or disable tracker during installation. View README for more details.  -->
-# MAGIC <img width="1px" src="https://ppxrzfxige.execute-api.us-west-2.amazonaws.com/v1/analytics?category=data-science&org_id=4148934117703857&notebook=%2Fconfig&demo_name=llm-rag-chatbot&event=VIEW&path=%2F_dbdemos%2Fdata-science%2Fllm-rag-chatbot%2Fconfig&version=1">
 
 # COMMAND ----------
 
@@ -40,11 +34,9 @@ bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
 # COMMAND ----------
 
 scopes = dbutils.secrets.listScopes()
+
 if scope_name not in [scope.name for scope in scopes]:
     create_scope(scope_name, access_token, workspace_url)
-    create_secret("rag_sp_token", access_token,
-                  scope_name, access_token, workspace_url)
-    create_secret("aws_access_key_id", aws_access_key,
-                  scope_name, access_token, workspace_url)
-    create_secret("aws_secret_access_key", aws_secret_access_key,
-                  scope_name, access_token, workspace_url)
+    create_secret("rag_sp_token", access_token, scope_name, access_token, workspace_url)
+    create_secret("aws_access_key_id", aws_access_key, scope_name, access_token, workspace_url)
+    create_secret("aws_secret_access_key", aws_secret_access_key, scope_name, access_token, workspace_url)
