@@ -286,7 +286,7 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC To verify, check that the vector embeddings was successfully stored within our new Delta Table llm_pdf_documentation.
+# MAGIC To verify, check that the vector embeddings was successfully stored within our new Delta Table `llm_pdf_documentation`.
 
 # COMMAND ----------
 
@@ -398,18 +398,17 @@ pprint(docs)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.6 [Optional] Using Alternative Embedding Models
-# MAGIC Let's explore how alternative models can help us
+# MAGIC ## 1.6 [Optional] Using Amazon Titan Text Embeddings
+# MAGIC Previously, you used BGE as an embeddings model. Let's explore the impact of using a different embeddings model.
 # MAGIC
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Deploying External Model Endpoint for AWS BedRock Titan Text Embeddings Model
+# MAGIC ### Deploying external model for Amazon Titan Text Embeddings
 # MAGIC Let's try this with an [external embeddings model](https://docs.databricks.com/en/generative-ai/external-models/index.html) from Amazon BedRock. To deploy our external model, we will use our AWS Credentials that have been configured at the start of the workshop.
 
 # COMMAND ----------
-
 
 deploy_client = get_deploy_client('databricks')
 
@@ -440,7 +439,7 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's see what the `Titan Embeddings model` outputs for the query "What is Apache Spark?", and let's compare it to the output from `BGE embeddings model`
+# MAGIC Let's compare Amazon Titan Text Embeddings vs. BGE embeddings models.
 
 # COMMAND ----------
 
@@ -459,7 +458,7 @@ print("bge embeddings model dimensions: " +
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Some key differences we immediately see between `BGE` and `Titan Embeddings` is a difference in the dimensions for the embeddings, and in the API (where BGE model requires a list VS titan requiring a string as input). The choice of vector embedding model is crucial because it decides how we represent our document data. When we perform vector similarity search using different embedding models, the information that we retrieve will also be different.
+# MAGIC Notice that a key difference between Titan and BGE is the number of dimensions. In addition, there are differences in the API input formats: BGE requires a list vs. Titan requires a string. The choice of your embeddings model is crucial because it determines how you represent your data. This impacts your similarity search results.
 # MAGIC
 # MAGIC
 
@@ -525,7 +524,7 @@ def get_titan_embedding(contents: pd.Series) -> pd.Series:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Creating Vector Search Index using Titan Embeddings
+# MAGIC ### Creating Vector Search Index using Amazon Titan Text Embeddings
 
 # COMMAND ----------
 
