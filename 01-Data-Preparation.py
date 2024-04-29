@@ -406,7 +406,7 @@ pprint(docs)
 
 # MAGIC %md
 # MAGIC ### Deploying external model for Amazon Titan Text Embeddings
-# MAGIC Let's try this with an [external embeddings model](https://docs.databricks.com/en/generative-ai/external-models/index.html) from Amazon BedRock. To deploy our external model, we will use our AWS Credentials that have been configured at the start of the workshop.
+# MAGIC Let's try this with an [external embeddings model](https://docs.databricks.com/en/generative-ai/external-models/index.html) from Amazon Bedrock. To deploy, you use AWS Credentials securely configured in [secret scopes](https://docs.databricks.com/en/security/secrets/secret-scopes.html).
 
 # COMMAND ----------
 
