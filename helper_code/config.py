@@ -10,12 +10,12 @@ aws_account_id = "{Fill in your AWS Account ID}"
 aws_access_key = "{Fill in your AWS Access Key}"
 aws_secret_access_key = "{Fill in your AWS Secret Access Key}"
 
-# DATABRICKS EXTERNAL LOCATION S3 URL
-S3_LOCATION = "{Ignore if at AWS Led Event, otherwise fill up with the details of your URL of s3 bucket e.g s3://BUCKET-NAME}"
-
 # DATABRICKS VECTOR SEARCH ENDPOINT
 VECTOR_SEARCH_ENDPOINT_NAME = "vector-search-endpoint" 
-# (You may have to change th above value if instructed)
+# (You may have to change the above value if instructed)
+
+# DATABRICKS EXTERNAL LOCATION S3 URL
+S3_LOCATION = "{Ignore at AWS-hosted events}"
 
 # DATABRICKS CONFIGURATION
 catalog = "catalog_" + aws_account_id
@@ -29,16 +29,15 @@ bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
 
 # COMMAND ----------
 
-from pyspark.sql import SparkSession
+# Automate identification of external location for AWS-hosted events
+workshop_prefix = "s3://awsdb-ws-"
 
-# Create a SparkSession
+from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
-# Execute the SHOW EXTERNAL LOCATIONS command
 external_locations = spark.sql("SHOW EXTERNAL LOCATIONS").collect()
-# Print the results
 if len(external_locations) > 0:
     for row in external_locations:
-        if row.url.startswith("s3://aws-db-ws"):
+        if row.url.startswith(workshop_prefix):
             S3_LOCATION = row.url
 
 # COMMAND ----------
