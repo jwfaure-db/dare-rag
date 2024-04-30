@@ -1,20 +1,19 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Lab 1: Ingest and Prepare PDF Data for Self Managed Vector Search Embeddings
+# MAGIC # Lab 1: Ingest and Prepare Data
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.1 Set-up
+# MAGIC ## 1.1 Install dependencies and run helper code
+# MAGIC
+# MAGIC To get started, let's run the following code blocks within your new notebook. This installs dependencies, set environment variables, and run the helper code loaded into our Databricks Workspace. 
+# MAGIC
+# MAGIC *Please be patient: It may take up to 3-5 minutes for packages to install.*
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Installing Libraries and Run Helper Code
-
-# COMMAND ----------
-
-# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.1.5 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==1.10.9 mlflow==2.10.1
+# MAGIC %pip install mlflow==2.10.1 transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.1.5 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==2.5.2
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -25,16 +24,15 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.2 Storing PDF Data in Delta Tables
-# MAGIC The first thing we want to do for our RAG implementation is to store our PDF data within Databricks
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Create an external volume within your new Catalog
-# MAGIC Now that your AWS and Databricks environments are set up, you can start preparing data for processing.
+# MAGIC ## 1.2 Storing your PDFs in binary format within Delta Tables
+# MAGIC To get started with your RAG implementation, you will need to store your PDF data within Databricks. 
 # MAGIC
-# MAGIC An [external volume](https://docs.databricks.com/en/connect/unity-catalog/volumes.html)  is a Unity Catalog governed objects representing a logical volume of storage in a cloud object storage location, such as Amazon S3. You use volumes to store and access files in any format, including structured, semi-structured, and unstructured data.
+# MAGIC <img src="https://raw.githubusercontent.com/databricks-demos/dbdemos-resources/main/images/product/chatbot-rag/rag-pdf-1.png" style="display: block; margin: 0 auto"  width="900px;">
+# MAGIC
+# MAGIC First, let's: 
+# MAGIC
+# MAGIC * Import the necessary libaries you will require. Don't worry, you will learn about these libraries later on. 
+# MAGIC * Configure the S3 location of your documents. This is based on the previously configured external location. 
 
 # COMMAND ----------
 
@@ -48,13 +46,21 @@ from llama_index import Document, set_global_tokenizer
 from llama_index.langchain_helpers.text_splitter import SentenceSplitter
 import re
 from unstructured.partition.auto import partition
+
 spark.conf.set("spark.sql.conf.bucket", S3_LOCATION + "/documents")
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create an external volume within your new Catalog
+# MAGIC
+# MAGIC Now let's create an [external volume](https://docs.databricks.com/en/connect/unity-catalog/volumes.html). An external volume is a Unity Catalog governed objects representing a logical volume of storage in a cloud object storage location, such as Amazon S3. You use volumes to store and access files in any format, including structured, semi-structured, and unstructured data.
+# MAGIC
+
+# COMMAND ----------
+
 # MAGIC %sql
-# MAGIC CREATE EXTERNAL VOLUME IF NOT EXISTS pdf_volume
-# MAGIC LOCATION '${spark.sql.conf.bucket}';
+# MAGIC CREATE EXTERNAL VOLUME IF NOT EXISTS pdf_volume LOCATION '${spark.sql.conf.bucket}';
 
 # COMMAND ----------
 
@@ -64,8 +70,10 @@ spark.conf.set("spark.sql.conf.bucket", S3_LOCATION + "/documents")
 # COMMAND ----------
 
 volume_folder = f"/Volumes/{catalog}/{db}/pdf_volume"
+
 if len(dbutils.fs.ls(volume_folder)) == 0:
     upload_pdfs_to_volume(volume_folder + "/llm_papers")
+
 display(dbutils.fs.ls(volume_folder + "/llm_papers"))
 
 # COMMAND ----------
@@ -104,18 +112,24 @@ df = (spark.readStream
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.3 Processing PDF Binary Data
-# MAGIC To make use of the data within the PDFs, we need to implement further processing
+# MAGIC --- 
+# MAGIC
+# MAGIC ## 1.3 Processing your PDF Binary data
+# MAGIC Great job! Your PDFs are now stored as BINARY within our `pdf_raw` Delta Table. The next step is to process them so that they are easily searchable. At a high-level, the below steps are required:
+# MAGIC
+# MAGIC * Extract text from PDFs using Optical Character Recognition (OCR).
+# MAGIC * Breaking the text extracted into smaller chunks.
+# MAGIC * Using an Embeddings Model to convert text into vectors.
+# MAGIC * Store within a new `llm_pdf_documentation` Delta Table.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Extracing Text from PDFs
-# MAGIC Great job! Your PDFs are now stored as `BINARY` within our pdf_raw Delta Table. The next step is to process them so that they are easily searchable.
+# MAGIC ### Extracting text from PDFs
 # MAGIC
-# MAGIC First, you extract text from PDFs. This can be tricky as some PDFs are difficult to handle and may have been saved as images. Here, you use the [unstructured](https://github.com/Unstructured-IO/unstructured) open-source library within a [User-Defined Function](https://docs.databricks.com/en/udf/index.html) (UDF) .
+# MAGIC First, you extract text from PDFs. This can be tricky as some PDFs are difficult to handle and may have been saved as images. Here, you use the [unstructured](https://github.com/Unstructured-IO/unstructured) open-source library within a [User-Defined Function](https://docs.databricks.com/en/udf/index.html) (UDF).
 # MAGIC
-# MAGIC To extract our PDF, let's install the relevant libraries in your notebook compute nodes:
+# MAGIC To extract our PDF, let's install the relevant libraries in your notebook compute nodes. *Note: The `install_ocr_nodes()` function is defined in the helper code.*
 
 # COMMAND ----------
 
@@ -127,7 +141,6 @@ install_ocr_on_nodes()
 # MAGIC Now, let's create the text extraction function for your PDFs:
 
 # COMMAND ----------
-
 
 def extract_doc_text(x: bytes) -> str:
     # Read files and extract the values with unstructured
@@ -146,7 +159,6 @@ def extract_doc_text(x: bytes) -> str:
 
 # COMMAND ----------
 
-
 with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true') as pdf:
     doc = extract_doc_text(pdf.content)
     print(doc)
@@ -154,14 +166,16 @@ with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC You should see that text content has been extracted from the raw [PDF file](https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true) . This looks great, text data is now processed from the PDF!
+# MAGIC You should see that text content has been extracted from the raw [PDF file](https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true). This looks great, text data is now processed from the PDF!
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Chunking
 # MAGIC
-# MAGIC In this example, some PDFs are very large, with a lot of text. You use SentenceSplitter  and ensure that each chunk isn't bigger than 500 tokens. Remember that LLMs have a limited context window. For example, 4096 tokens for Llama2. As a general rule, it is recommended that Context + Instructions + Answer < Max Context Window (4096 tokens).
+# MAGIC In this example, some PDFs are very large, with a lot of text. You use [SentenceSplitter](https://docs.llamaindex.ai/en/stable/api/llama_index.core.node_parser.SentenceSplitter.html) and ensure that each chunk isn't bigger than `500` tokens. 
+# MAGIC
+# MAGIC Remember that LLMs have a limited context window. As a general rule, it is recommended that Context + Instructions + Answer < Max Context Window.
 # MAGIC
 # MAGIC Let's create a function for us to do that chunking for us. We'll use [text_splitter](https://python.langchain.com/docs/modules/data_connection/document_transformers/) to split the long text into smaller chunks. You create a [pandas UDF](https://docs.databricks.com/en/udf/pandas.html) for high-performance processing.
 
@@ -169,7 +183,6 @@ with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main
 
 
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
-
 
 @pandas_udf("array<string>")
 def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
@@ -191,8 +204,10 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1.4 Storing data as vector embeddings within Delta Tables
-# MAGIC To make the PDF data available for similarity search in RAG, we need to store the data as vector embeddings
+# MAGIC ---
+# MAGIC
+# MAGIC ## 1.4 Storing your data as vector embeddings within a Delta Table
+# MAGIC The next step is to convert the chunked text into vectors using an Embeddings Model. This will allow for vector similarity search.
 
 # COMMAND ----------
 
@@ -209,7 +224,6 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 # MAGIC In this example, we'll use the foundation models `BGE` provided by Databricks to convert our PDFs into vector embeddings. Let's see what this `BGE` model outputs for the query "What is Apache Spark?"
 
 # COMMAND ----------
-
 
 # bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api.
 deploy_client = get_deploy_client("databricks")
@@ -242,7 +256,6 @@ pprint(embeddings)
 
 # COMMAND ----------
 
-
 @pandas_udf("array<float>")
 def get_embedding(contents: pd.Series) -> pd.Series:
     import mlflow.deployments
@@ -269,10 +282,9 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's write some spark code to write to this new delta table `llm_pdf_documentation`
+# MAGIC Let's write some spark code to write to this new delta table `llm_pdf_documentation`.
 
 # COMMAND ----------
-
 
 (spark.readStream.table('pdf_raw')
       .withColumn("content", F.explode(read_as_chunk("content")))
@@ -303,15 +315,13 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 # MAGIC %md
 # MAGIC ## 1.5 Create Vector Search Index for your Delta Table
 # MAGIC Let's create a Vector Search Index within Databricks to perform vector similarity search.
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC
 # MAGIC Databricks provides multiple types of [Vector Search Index](https://docs.databricks.com/en/generative-ai/create-query-vector-search.html#create-a-vector-search-index):
-# MAGIC - [Managed embedding](https://docs.databricks.com/en/generative-ai/retrieval-augmented-generation.html#process-unstructured-data-and-databricks-managed-embeddings) where you provide a text column and endpoint name. Databricks synchronizes the index with your Delta Table.
-# MAGIC - [Self-managed embedding](https://docs.databricks.com/en/generative-ai/retrieval-augmented-generation.html#process-unstructured-data-and-customer-managed-embeddings) where you compute embeddings and store them in a field in a Delta Table, that can be synchronized with the index.
-# MAGIC - Direct vector search index for real-time indexation use cases where you require the flexibility of no Delta Table and manage indexation using the API
-# MAGIC In this example, you will learn how to setup a self-managed embedding index on a Delta Table. To do so, you compute the embeddings of our chunks and save them in a Delta Table column as array<float>.
+# MAGIC - [Managed embeddings](https://docs.databricks.com/en/generative-ai/retrieval-augmented-generation.html#process-unstructured-data-and-databricks-managed-embeddings) where you provide a text column and endpoint name. Databricks synchronizes the index with your Delta Table.
+# MAGIC - [Self-managed embeddings](https://docs.databricks.com/en/generative-ai/retrieval-augmented-generation.html#process-unstructured-data-and-customer-managed-embeddings) where you compute embeddings and store them in a field in a Delta Table, that can be synchronized with the index.
+# MAGIC - **Direct vector search index** for real-time indexation use cases where you require the flexibility of no Delta Table and manage indexation using the API.
+# MAGIC
+# MAGIC In this example, you will learn how to setup a **self-managed embeddings index** on a Delta Table. To do so, you compute the embeddings of our chunks and save them in a Delta Table column as `array<float>`.
 
 # COMMAND ----------
 
@@ -327,24 +337,27 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 vsc = VectorSearchClient(disable_notice=True)
 
-
 if len(vsc.list_endpoints()) == 0 or VECTOR_SEARCH_ENDPOINT_NAME not in [e['name'] for e in vsc.list_endpoints()['endpoints']]:
-    vsc.create_endpoint(name=VECTOR_SEARCH_ENDPOINT_NAME,
-                        endpoint_type="STANDARD")
+    vsc.create_endpoint(name=VECTOR_SEARCH_ENDPOINT_NAME, endpoint_type="STANDARD")
 
 wait_for_vs_endpoint_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME)
+
 print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC You can view your endpoint in your Databricks Workspace. Go to **Compute**. Then, click on the **Vector Search** tab. Then, click on the endpoint name to see all indexes served by the endpoint. 
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC
-# MAGIC ### Creating Vector Search Index with Self-Managed Embeddings
+# MAGIC ### Creating Vector Search Index with self-managed embedding
+# MAGIC
 # MAGIC Let's create the self-managed vector search using our endpoint:
 
 # COMMAND ----------
-
 
 # The table we'd like to index
 source_table_fullname = f"{catalog}.{db}.llm_pdf_documentation"
@@ -368,9 +381,7 @@ else:
     vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).sync()
 
 # Let's wait for the index to be ready and all our embeddings to be created and indexed
-wait_for_index_to_be_ready(
-    vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
-
+wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
 # COMMAND ----------
 
@@ -384,14 +395,11 @@ wait_for_index_to_be_ready(
 
 question = "How can I track billing usage on my workspaces?"
 
-response = deploy_client.predict(
-    endpoint="databricks-bge-large-en", inputs={"input": [question]})
+response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
 embeddings = [e['embedding'] for e in response.data]
 
-results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
-    query_vector=embeddings[0],
-    columns=["url", "content"],
-    num_results=1)
+results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(query_vector=embeddings[0], columns=["url", "content"], num_results=1)
+
 docs = results.get('result', {}).get('data_array', [])
 pprint(docs)
 
@@ -399,14 +407,10 @@ pprint(docs)
 
 # MAGIC %md
 # MAGIC ## 1.6 [Optional] Using Amazon Titan Text Embeddings
-# MAGIC Previously, you used BGE as an embeddings model. Let's explore the impact of using a different embeddings model.
+# MAGIC Previously, you used BGE as an embeddings model. Let's explore the impact of using a different embeddings model. 
 # MAGIC
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Deploying external model for Amazon Titan Text Embeddings
-# MAGIC Let's try this with an [external embeddings model](https://docs.databricks.com/en/generative-ai/external-models/index.html) from Amazon Bedrock. To deploy, you use AWS Credentials securely configured in [secret scopes](https://docs.databricks.com/en/security/secrets/secret-scopes.html).
+# MAGIC Let's try an [external model](https://docs.databricks.com/en/generative-ai/external-models/index.html) `titan-embed-g1-text-02` from Amazon Bedrock. To deploy, you use AWS Credentials securely configured in [secret scopes](https://docs.databricks.com/en/security/secrets/secret-scopes.html).
+# MAGIC
 
 # COMMAND ----------
 
@@ -439,28 +443,26 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's compare Amazon Titan Text Embeddings vs. BGE embeddings models.
+# MAGIC Let's compare Amazon Titan Text Embeddings vs. BGE.
 
 # COMMAND ----------
 
-bge_embeddings = deploy_client.predict(
-    endpoint="databricks-bge-large-en", inputs={"input": ["What is Apache Spark?"]})
-titan_embeddings = deploy_client.predict(
-    endpoint=embeddings_model_endpoint_name, inputs={"input": "What is Apache Spark?"})
+bge_embeddings = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": ["What is Apache Spark?"]})
+titan_embeddings = deploy_client.predict(endpoint=embeddings_model_endpoint_name, inputs={"input": "What is Apache Spark?"})
 
-pprint(titan_embeddings)
+# pprint(titan_embeddings)
 
-print("titan embeddings model dimensions: " +
-      str(len(titan_embeddings.get('data')[0].get('embedding'))))
-print("bge embeddings model dimensions: " +
-      str(len(bge_embeddings.get('data')[0].get('embedding'))))
+print("titan embeddings model dimensions: " + str(len(titan_embeddings.get('data')[0].get('embedding'))))
+print("bge embeddings model dimensions: " + str(len(bge_embeddings.get('data')[0].get('embedding'))))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Notice that a key difference between Titan and BGE is the number of dimensions. In addition, there are differences in the API input formats: BGE requires a list vs. Titan requires a string. The choice of your embeddings model is crucial because it determines how you represent your data. This impacts your similarity search results.
+# MAGIC Notice that a key difference between Titan and BGE is the number of dimensions. In addition, there are implementation differences in the API input formats: BGE requires a list vs. Titan requires a string. 
 # MAGIC
+# MAGIC The choice of your embeddings model is crucial because it determines how you represent your data. This impacts your similarity search results.
 # MAGIC
+# MAGIC Let's continue with creating a Delta Table, Pandas UDF and Spark code for your Titan embeddings.
 
 # COMMAND ----------
 
@@ -474,7 +476,6 @@ print("bge embeddings model dimensions: " +
 # MAGIC ) TBLPROPERTIES (delta.enableChangeDataFeed = true);
 
 # COMMAND ----------
-
 
 @pandas_udf("array<float>")
 def get_titan_embedding(contents: pd.Series) -> pd.Series:
@@ -514,20 +515,24 @@ def get_titan_embedding(contents: pd.Series) -> pd.Series:
     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/titan_pdf_chunk')
     .table('titan_llm_pdf_documentation').awaitTermination())
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC To verify, check that the vector embeddings was successfully stored within our new Delta Table `titan_llm_pdf_documentation`.
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT embedding FROM titan_llm_pdf_documentation WHERE url like '%.pdf' limit 1
-# MAGIC
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Creating Vector Search Index using Amazon Titan Text Embeddings
+# MAGIC ### Creating a Vector Search Index using Amazon Titan Text Embeddings
+# MAGIC
+# MAGIC Let's create our vector search endpoint, along with the self-managed vector search using our endpoint. Note that multiple indexes can be deployed to the same endpoint.
 
 # COMMAND ----------
-
 
 # The table we'd like to index
 source_table_fullname = f"{catalog}.{db}.titan_llm_pdf_documentation"
@@ -553,6 +558,10 @@ else:
 # Let's wait for the index to be ready and all our embeddings to be created and indexed
 wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, let's give it a try and search for similar content. Search results is dependent on the embeddings model you use.
 
 # COMMAND ----------
 
@@ -566,6 +575,7 @@ results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similari
     query_vector=embeddings[0],
     columns=["url", "content"],
     num_results=1)
+    
 docs = results.get('result', {}).get('data_array', [])
 pprint(docs)
 
@@ -574,3 +584,5 @@ pprint(docs)
 # MAGIC %md
 # MAGIC ## Conclusion
 # MAGIC In this Lab, you learned how Databricks simplifies and accelerates a foundational generative AI architecture. You learned how to ingest and prepare your documents. You then deployed a vector search endpoint with just a few lines of code. Next, you'll delve deeper into how you can leverage vector search to build an effective generative AI chatbot application.
+# MAGIC
+# MAGIC Next, open [02-Prepare-Model]($./02-Prepare-Model) to prepare your chat model.

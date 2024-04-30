@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %md-sandbox
+# MAGIC %md
 # MAGIC # Lab 3: Deploy and monitor
 # MAGIC
 # MAGIC Let's now deploy our model. Once live, you monitor its behavior to detect potential anomalies and drift over time.
@@ -21,22 +21,20 @@
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
+# MAGIC %md
 # MAGIC ## 3.2 Deploy our model with Inference tables
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-1.png?raw=true" style="display: block; margin: 25px auto;" width="900px">
-# MAGIC
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/rag-eval-online-2-1.png?raw=true" style="display: block; margin: 25px auto; width: 900px;" />
 # MAGIC
 # MAGIC 1. Let's first import some prerequisite libraries.
 
 # COMMAND ----------
 
-from databricks.sdk.service.serving import DataframeSplitInput
 import urllib
 import json
 import mlflow
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
+from databricks.sdk.service.serving import DataframeSplitInput, EndpointCoreConfigInput, ServedModelInput
 
 # COMMAND ----------
 
@@ -47,15 +45,7 @@ from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelI
 
 # COMMAND ----------
 
-environment_vars = {"DATABRICKS_TOKEN": dbutils.secrets.get(
-    scope_name, "rag_sp_token")}
-model_name = f"{catalog}.{db}.advanced_chatbot_model"
 serving_endpoint_name = f"{catalog}_{db}_endpoint"
-
-client = MlflowClient()
-mlflow.set_registry_uri('databricks-uc')
-latest_model = client.get_registered_model(model_name)
-version = get_latest_model_version(model_name)
 
 auto_capture_config = {
     "catalog_name": catalog,
@@ -72,11 +62,19 @@ auto_capture_config = {
 
 # COMMAND ----------
 
-w = WorkspaceClient()
-serving_client = EndpointApiClient()
+model_name = f"{catalog}.{db}.advanced_chatbot_model"
 
-# Start the endpoint using the REST API (you can do it using the UI directly)
-serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version=version, workload_size="Small",scale_to_zero_enabled=True, wait_start=True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
+# Get latest model from catalog
+client = MlflowClient()
+mlflow.set_registry_uri('databricks-uc')
+latest_model = client.get_model_version_by_alias(model_name, "prod")
+
+# Configure variables for the endpoint
+environment_vars={"DATABRICKS_TOKEN": "{{secrets/"+scope_name+"/rag_sp_token}}"}
+
+# Serve endpoint
+serving_client = EndpointApiClient()
+serving_client.create_endpoint_if_not_exists(serving_endpoint_name, model_name=model_name, model_version = latest_model.version, workload_size="Small", scale_to_zero_enabled=True, wait_start = True, auto_capture_config=auto_capture_config, environment_vars=environment_vars)
 
 displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/ml/endpoints/{serving_endpoint_name}">Model Serving Endpoint page</a> for more details.')
 
@@ -87,15 +85,19 @@ displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/m
 
 # COMMAND ----------
 
-df_split = DataframeSplitInput(columns=["messages"],
-                               data=[[{"messages": [{"role": "user", "content": "What is Apache Spark?"},
-                                                    {"role": "assistant", "content": "Apache Spark is an open-source data processing engine that is widely used in big data analytics."},
-                                                    {"role": "user",
-                                                     "content": "Does it support streaming?"}
-                                                    ]}]])
-
-w = WorkspaceClient()
-w.serving_endpoints.query(serving_endpoint_name, dataframe_split=df_split)
+serving_client.query_inference_endpoint(
+    serving_endpoint_name,
+    {
+        "messages": [
+            {"role": "user", "content": "What is Apache Spark?"},
+            {
+                "role": "assistant",
+                "content": "Apache Spark is an open-source data processing engine that is widely used in big data analytics.",
+            },
+            {"role": "user", "content": "Does it support streaming?"},
+        ]
+    },
+)
 
 # COMMAND ----------
 

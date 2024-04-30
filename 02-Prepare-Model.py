@@ -351,12 +351,11 @@ print(is_about_llm_chain.invoke({
 
 # COMMAND ----------
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(scope_name, "rag_sp_token")
 index_name = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
+host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 
 # Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
-test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp_token",
-                      vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en")
+test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en")
 
 # COMMAND ----------
 
@@ -368,20 +367,22 @@ test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp
 # from langchain.chains import RetrievalQA
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
+
 def get_retriever(persist_dir: str = None):
-    # Get the vector search index
-    vsc = VectorSearchClient(workspace_url=workspace_url,
-                             personal_access_token=os.environ.get("DATABRICKS_TOKEN"))
+    os.environ["DATABRICKS_HOST"] = host
+    #Get the vector search index
+    vsc = VectorSearchClient(workspace_url=host, personal_access_token=os.environ["DATABRICKS_TOKEN"])
     vs_index = vsc.get_index(
         endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
         index_name=index_name
     )
+
     # Create the retriever
     vectorstore = DatabricksVectorSearch(
         vs_index, text_column="content", embedding=embedding_model, columns=["url"]
     )
     return vectorstore.as_retriever(search_kwargs={'k': 4})
-
 
 retriever = get_retriever()
 
@@ -392,7 +393,6 @@ retrieve_document_chain = (
 )
 
 # COMMAND ----------
-
 
 print("Query 1: What is Apache Spark?")
 result = retrieve_document_chain.invoke(
@@ -601,8 +601,7 @@ display_chat(dialog["messages"], response)
 
 # COMMAND ----------
 
-init_experiment_for_batch("chatbot-rag-llm-advanced",
-                          "experiment_" + aws_account_id)
+init_experiment_for_batch("chatbot-rag-llm-advanced", "experiment_" + aws_account_id)
 
 # COMMAND ----------
 
@@ -611,15 +610,13 @@ init_experiment_for_batch("chatbot-rag-llm-advanced",
 
 # COMMAND ----------
 
-
 mlflow.set_registry_uri("databricks-uc")
 model_name = f"{catalog}.{db}.advanced_chatbot_model"
 
 with mlflow.start_run(run_name="chatbot_rag") as run:
     # Get our model signature from input/output
-    input_df = pd.DataFrame({"messages": [dialog]})
     output = full_chain.invoke(dialog)
-    signature = infer_signature(input_df, output)
+    signature = infer_signature(dialog, output)
 
     model_info = mlflow.langchain.log_model(
         full_chain,
@@ -634,8 +631,9 @@ with mlflow.start_run(run_name="chatbot_rag") as run:
             "pydantic==2.5.2 --no-binary pydantic",
             "cloudpickle==" + cloudpickle.__version__
         ],
-        input_example=input_df,
-        signature=signature
+        input_example=dialog,
+        signature=signature,
+        example_no_conversion=True
     )
 
 # COMMAND ----------
@@ -650,7 +648,7 @@ model.invoke(dialog)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Now, let's register our model. In a new cell, run the following code:
+# MAGIC Now, let's register the latest version of our model with the `prod` alias. In a new cell, run the following code:
 
 # COMMAND ----------
 
