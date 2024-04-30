@@ -1,18 +1,14 @@
 # Databricks notebook source
 # MAGIC %md-sandbox
-# MAGIC # Lab 2: Advanced chatbot with message history and filter using Langchain
+# MAGIC # Lab 2: Prepare your chat model
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-2.png?raw=true" style="float: right; margin-left: 10px"  width="900px;">
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-2.png?raw=true" style="display: block; margin: 25px auto"  width="900px;">
 # MAGIC
-# MAGIC Our Vector Search Index is now ready!
+# MAGIC Now that a knowledge base is set up and vector search is ready, let's create a RAG application using LangChain , a framework for developing applications powered by foundation models. You use LangChain to:
 # MAGIC
-# MAGIC Let's now create a more advanced langchain model to perform RAG.
-# MAGIC
-# MAGIC We will improve our langchain model with the following:
-# MAGIC
-# MAGIC - Build a complete chain supporting a chat history, using llama 2 input style
-# MAGIC - Add a filter to only answer Databricks-related questions
-# MAGIC - Compute the embeddings with Databricks BGE models within our chain to query the self-managed Vector Search Index
+# MAGIC * Build a complete chain supporting conversation history
+# MAGIC * Add a filter to only answer questions about a specific topic
+# MAGIC * Compute embeddings within our chain to query the Vector Search Index
 # MAGIC
 # MAGIC <!-- Collect usage data (view). Remove it to disable collection or disable tracker during installation. View README for more details.  -->
 # MAGIC <img width="1px" src="https://ppxrzfxige.execute-api.us-west-2.amazonaws.com/v1/analytics?category=data-science&org_id=4148934117703857&notebook=%2F02-advanced%2F02-Advanced-Chatbot-Chain&demo_name=llm-rag-chatbot&event=VIEW&path=%2F_dbdemos%2Fdata-science%2Fllm-rag-chatbot%2F02-advanced%2F02-Advanced-Chatbot-Chain&version=1">
@@ -21,7 +17,11 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2.1 Set-up
+# MAGIC ## 2.1 Install dependencies and run helper code
+# MAGIC
+# MAGIC To get started, let's run the following code blocks within your new notebook. This installs dependencies, set environment variables, and run the helper code loaded into our Databricks Workspace. 
+# MAGIC
+# MAGIC *Please be patient: It may take up to 3-5 minutes for packages to install.*
 
 # COMMAND ----------
 
@@ -36,32 +36,44 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2.2 Working with Large Language Models
-# MAGIC Let's explore the different Large Language Models that we can work with within Databricks. We'll use [PromptTemplate](https://python.langchain.com/docs/modules/model_io/prompts/quick_start#prompttemplate)  and send a query to [Databricks](https://python.langchain.com/docs/integrations/providers/databricks) Foundation Model API using LangChain.
+# MAGIC ## 2.2 Working with Large Language Models (LLMs)
+# MAGIC
+# MAGIC Let's explore how you can access leading Large Language Models (LLMs) with Databricks and Amazon Bedrock. 
+# MAGIC
+# MAGIC First, let's import the necessary libaries you will require. Don't worry, you will learn about these libraries later on. 
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Exploring Amazon Bedrock - Claude 3 Sonnet Model
-
-# COMMAND ----------
-
-from mlflow.models import infer_signature
+# Import utility libraries
 import cloudpickle
 import json
-from langchain.schema.runnable import RunnableBranch, RunnableParallel, RunnablePassthrough
-from langchain.schema.runnable import RunnableBranch
+from operator import itemgetter
+
+# Import LangChain libaries for embeddings and vector search
 from langchain.embeddings import DatabricksEmbeddings
 from langchain.vectorstores import DatabricksVectorSearch
 from databricks.vector_search.client import VectorSearchClient
-from operator import itemgetter
-from langchain.schema.runnable import RunnableLambda
+
+# Import LangChain libaries for your chat model
+from langchain.schema.runnable import RunnableBranch, RunnableLambda, RunnableParallel, RunnablePassthrough
 from langchain_community.chat_models import ChatDatabricks
 from langchain.schema.output_parser import StrOutputParser
 from langchain.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.chat_models import ChatDatabricks
+
+# Import MLFlow for model deployment
 import mlflow.deployments
+from mlflow.models import infer_signature
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Exploring Claude 3 on Amazon Bedrock
+# MAGIC
+# MAGIC Let's try an [external model](https://docs.databricks.com/en/generative-ai/external-models/index.html) `claude-3-sonnet-20240229-v1:0` from Amazon Bedrock. To deploy, you use AWS Credentials securely configured in [secret scopes](https://docs.databricks.com/en/security/secrets/secret-scopes.html).
+
+# COMMAND ----------
 
 client = mlflow.deployments.get_deploy_client("databricks")
 
@@ -92,18 +104,29 @@ else:
 
 # COMMAND ----------
 
-
-messages = [
-    SystemMessage(content="You're a helpful assistant"),
-    HumanMessage(content="What is databricks"),
-]
-claude_model = ChatDatabricks(
-    endpoint=bedrock_chat_model_endpoint_name, max_tokens=500)
-claude_model.invoke(messages, stop=["Human:"])
-
+# MAGIC %md
+# MAGIC Now that the model serving endpoint is available, let's try it. 
+# MAGIC
+# MAGIC *Note that you can use [system prompts with Anthropic Claude on Amazon Bedrock](https://community.aws/content/2dJmYpKlFNh6NOeC71GIZWZkfST/system-prompts-with-anthropic-claude-on-amazon-aws-bedrock).*
+# MAGIC  
 
 # COMMAND ----------
 
+messages = [
+    SystemMessage(content="You're a helpful assistant"),
+    HumanMessage(content="What is databricks?"),
+]
+
+claude_model = ChatDatabricks(endpoint=bedrock_chat_model_endpoint_name, max_tokens=500)
+
+claude_model.invoke(messages, stop=["Human:"])
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, we'll use [PromptTemplate](https://python.langchain.com/docs/modules/model_io/prompts/quick_start#prompttemplate) and send a query.
+
+# COMMAND ----------
 
 prompt = PromptTemplate(
     input_variables=["question"],
@@ -115,44 +138,44 @@ chain_claude = (
     | claude_model
     | StrOutputParser()
 )
-print(chain_claude.invoke(
-    {"question": "How does Databricks compare to Snowflake?"}))
+
+print(chain_claude.invoke({"question": "How does Databricks work on AWS?"}))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Exploring Databricks DBRX Instruct Model
+# MAGIC ### Exploring DBRX
+# MAGIC
+# MAGIC DBRX is a new State-of-the-Art Open LLM created by Databricks. Let's try it.
 
 # COMMAND ----------
-
 
 prompt = PromptTemplate(
     input_variables=["question"],
     template="You are an assistant. Give a short answer to this question: {question}"
 )
-dbrx_model = ChatDatabricks(
-    endpoint="databricks-dbrx-instruct", max_tokens=500)
+
+dbrx_model = ChatDatabricks(endpoint="databricks-dbrx-instruct", max_tokens=500)
 
 chain = (
     prompt
     | dbrx_model
     | StrOutputParser()
 )
+
 print(chain.invoke({"question": "What is Spark?"}))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's select our model of choice
+# MAGIC Now, let's select our model of choice:
 
 # COMMAND ----------
 
 # chat_model = claude_model
 # alternate_chat_model = dbrx_model
 
-
 # OR
-
 chat_model = dbrx_model
 alternate_chat_model = claude_model
 
@@ -160,11 +183,7 @@ alternate_chat_model = claude_model
 
 # MAGIC %md
 # MAGIC ## 2.3 Working with Langchain
-# MAGIC Let's work with Langchain to build out
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC
 # MAGIC ### Adding conversation history to the prompt
 # MAGIC
 # MAGIC Now, we enhance our prompt by including conversation history along with the question. When invoking, we pass the conversation history as a list, specifying whether each message was sent by a user or the assistant. For example:
@@ -172,7 +191,7 @@ alternate_chat_model = claude_model
 # COMMAND ----------
 
 prompt_with_history_str = """
-Your are a Big Data chatbot. Please answer Big Data question only. If you don't know or not related to Big Data, don't answer.
+Your are a Databricks chatbot. Please answer Databricks questions only. If you don't know or not related to Databricks, don't answer.
 
 Here is a history between you and a human: {chat_history}
 
@@ -186,7 +205,10 @@ prompt_with_history = PromptTemplate(
 
 # COMMAND ----------
 
-# MAGIC %md When invoking our chain, we'll pass history as a list, specifying whether each message was sent by a user or the assistant. For example:
+# MAGIC %md
+# MAGIC When invoking our chain, we'll pass history as a list, specifying whether each message was sent by a user or the assistant. 
+# MAGIC
+# MAGIC For example:
 # MAGIC
 # MAGIC ```
 # MAGIC [
@@ -200,18 +222,13 @@ prompt_with_history = PromptTemplate(
 
 # COMMAND ----------
 
-
 # The question is the last entry of the history
-
 def extract_question(input):
     return input[-1]["content"]
 
 # The history is everything before the last question
-
-
 def extract_history(input):
     return input[:-1]
-
 
 chain_with_history = (
     {
@@ -235,7 +252,7 @@ print(chain_with_history.invoke({
 
 # MAGIC %md
 # MAGIC ### Filtering for questions on a specific topic
-# MAGIC Our chatbot should be professional and only answer questions related to a specific topic, for example, Databricks-related questions. One approach is to create a is_question_about_databricks_prompt prompt template for a classification step.
+# MAGIC Our chatbot should be professional and only answer questions related to a specific topic, for example, Databricks-related questions. One approach is to create a `is_question_about_databricks_prompt` prompt template for a classification step.
 # MAGIC
 # MAGIC *Note: this is a fairly naive implementation, another solution could be adding a small classification model based on the question embedding, providing faster classification*
 
@@ -284,7 +301,7 @@ is_about_llm_chain = (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's test our chain with a question which matches the desired topic, Databricks.
+# MAGIC Let's test our chain with a question which matches the desired topic.
 
 # COMMAND ----------
 
@@ -313,10 +330,8 @@ print(is_about_llm_chain.invoke({
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
+# MAGIC %md
 # MAGIC ### Use LangChain to retrieve documents from the vector store
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-1.png?raw=true" style="float: right" width="500px">
 # MAGIC
 # MAGIC Let's add our LangChain [retriever](https://python.langchain.com/docs/modules/data_connection/retrievers/).
 # MAGIC
@@ -324,6 +339,8 @@ print(is_about_llm_chain.invoke({
 # MAGIC
 # MAGIC * Creating the input question embeddings (with Databricks `bge-large-en`)
 # MAGIC * Calling the vector search index to find similar documents to augment the prompt with
+# MAGIC
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-1.png?raw=true" style="display: block; margin: 25px auto;" width="900px">
 # MAGIC
 # MAGIC [Databricks LangChain wrapper](https://python.langchain.com/docs/integrations/providers/databricks) makes it easy to do in one step, handling all the underlying logic and API call for you.
 
@@ -334,41 +351,38 @@ print(is_about_llm_chain.invoke({
 
 # COMMAND ----------
 
+index_name = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
+host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
+
+# Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
+test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp_token", vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en")
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC Now, let's add a retriever to the chain. This retriever is responsible for finding the most relevant documents to our prompt. In a new cell, run the following code.
 
 # COMMAND ----------
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(
-    scope_name, "rag_sp_token")
-index_name = f"{catalog}.{db}.llm_pdf_documentation_self_managed_vs_index"
-
-# Let's make sure the secret is properly setup and can access our vector search index. Check the quick-start demo for more guidance
-test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp_token",
-                      vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, index_name=index_name, embedding_endpoint_name="databricks-bge-large-en")
-
-# COMMAND ----------
-
 # from langchain.chains import RetrievalQA
-
-
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
 
 def get_retriever(persist_dir: str = None):
-    # Get the vector search index
-    vsc = VectorSearchClient(workspace_url=workspace_url,
-                             personal_access_token=os.environ.get("DATABRICKS_TOKEN"))
+    os.environ["DATABRICKS_HOST"] = host
+    #Get the vector search index
+    vsc = VectorSearchClient(workspace_url=host, personal_access_token=os.environ["DATABRICKS_TOKEN"])
     vs_index = vsc.get_index(
         endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
         index_name=index_name
     )
+
     # Create the retriever
     vectorstore = DatabricksVectorSearch(
         vs_index, text_column="content", embedding=embedding_model, columns=["url"]
     )
     return vectorstore.as_retriever(search_kwargs={'k': 4})
-
 
 retriever = get_retriever()
 
@@ -379,7 +393,6 @@ retrieve_document_chain = (
 )
 
 # COMMAND ----------
-
 
 print("Query 1: What is Apache Spark?")
 result = retrieve_document_chain.invoke(
@@ -404,7 +417,6 @@ for document in result:
 # MAGIC One solution is to add a step for our LLM to summarize the history and the last question, making it a better fit for our vector search query. Let's do that as a new step in our chain.
 
 # COMMAND ----------
-
 
 generate_query_to_retrieve_context_template = """
 Based on the chat history below, we want you to generate a query for an external data source to retrieve relevant documents so that we can better answer the question. The query should be in natual language. The external data source uses similarity search to search for relevant documents in a vector space. So the query should be similar to the relevant documents semantically. Answer with only the query. Do not add explanation.
@@ -461,19 +473,13 @@ print(f"Test retriever question, summarized with history: {output}")
 # MAGIC %md-sandbox
 # MAGIC ### Merging the retriever into our full chain
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-2.png?raw=true" style="float: right" width="600px">
+# MAGIC Let's now merge the retriever and the full LangChain chain. 
 # MAGIC
+# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-2.png?raw=true" style="display: block; margin: 25px auto;" width="900px">
 # MAGIC
-# MAGIC Let's now merge the retriever and the full LangChain chain.
-# MAGIC
-# MAGIC We will use a custom LangChain template for our assistant to give a proper answer.
-# MAGIC
-# MAGIC Make sure you take some time to try different templates and adjust your assistant tone and personality for your requirement.
-# MAGIC
-# MAGIC
+# MAGIC We will use a custom LangChain template for our assistant to give a proper answer. Make sure you take some time to try different templates and adjust your assistant tone and personality for your requirement.
 
 # COMMAND ----------
-
 
 question_with_history_and_context_str = """
 You are a reliable assistant for users focusing on Databricks. Your expertise covers Python, coding, SQL, data engineering, machine learning, AI, data warehousing, platform, API, and cloud administration, all in the context of Databricks. If a question falls outside your knowledge, you'll honestly say you don't know. In the chat, you are identified as "system" and the user as "user." Remember to read the conversation history for context before responding.
@@ -492,14 +498,11 @@ question_with_history_and_context_prompt = PromptTemplate(
     template=question_with_history_and_context_str
 )
 
-
 def format_context(docs):
     return "\n\n".join([d.page_content for d in docs])
 
-
 def extract_source_urls(docs):
     return [d.metadata["url"] for d in docs]
-
 
 relevant_question_chain = (
     RunnablePassthrough() |
@@ -549,7 +552,6 @@ full_chain = (
     | branch_node
 )
 
-
 # COMMAND ----------
 
 # MAGIC %md
@@ -591,26 +593,15 @@ display_chat(dialog["messages"], response)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Let's compare this output to the alternate model
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ## 2.4 Register the chatbot model to Unity Catalog
 # MAGIC
-# MAGIC
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC Databricks provides a fully-managed [ML lifecycle management using MLFlow](https://docs.databricks.com/en/mlflow/index.html), an open source platform for managing the end-to-end machine learning lifecycle including tracking experiments, model deployment and registry, and model serving.
 # MAGIC
 # MAGIC In a new cell, run the following code.
 
 # COMMAND ----------
 
-init_experiment_for_batch("chatbot-rag-llm-advanced",
-                          "experiment_" + aws_account_id)
+init_experiment_for_batch("chatbot-rag-llm-advanced", "experiment_" + aws_account_id)
 
 # COMMAND ----------
 
@@ -619,15 +610,13 @@ init_experiment_for_batch("chatbot-rag-llm-advanced",
 
 # COMMAND ----------
 
-
 mlflow.set_registry_uri("databricks-uc")
 model_name = f"{catalog}.{db}.advanced_chatbot_model"
 
 with mlflow.start_run(run_name="chatbot_rag") as run:
     # Get our model signature from input/output
-    input_df = pd.DataFrame({"messages": [dialog]})
     output = full_chain.invoke(dialog)
-    signature = infer_signature(input_df, output)
+    signature = infer_signature(dialog, output)
 
     model_info = mlflow.langchain.log_model(
         full_chain,
@@ -642,8 +631,9 @@ with mlflow.start_run(run_name="chatbot_rag") as run:
             "pydantic==2.5.2 --no-binary pydantic",
             "cloudpickle==" + cloudpickle.__version__
         ],
-        input_example=input_df,
-        signature=signature
+        input_example=dialog,
+        signature=signature,
+        example_no_conversion=True
     )
 
 # COMMAND ----------
@@ -658,21 +648,20 @@ model.invoke(dialog)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Now, let's register our model. In a new cell, run the following code:
+# MAGIC Now, let's register the latest version of our model with the `prod` alias. In a new cell, run the following code:
 
 # COMMAND ----------
 
 client = MlflowClient()
 model_version_to_evaluate = get_latest_model_version(model_name)
-client.set_registered_model_alias(
-    name=model_name, alias="prod", version=model_version_to_evaluate)
+client.set_registered_model_alias(name=model_name, alias="prod", version=model_version_to_evaluate)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2.5 Comparing outputs between Claude and DBRX
-# MAGIC Let's see how final outputs changes when we change the model that we use
+# MAGIC ## 2.5 Comparing outputs between Claude and DBRX models
 # MAGIC
+# MAGIC Let's now compare outputs and build an `alternate_full_chain` with our `alternate_chat_model`. 
 
 # COMMAND ----------
 
@@ -703,10 +692,8 @@ alternate_relevant_question_chain = (
 )
 
 alternate_branch_node = RunnableBranch(
-    (lambda x: "yes" in x["question_is_relevant"].lower(),
-     alternate_relevant_question_chain),
-    (lambda x: "no" in x["question_is_relevant"].lower(),
-        irrelevant_question_chain),
+    (lambda x: "yes" in x["question_is_relevant"].lower(), alternate_relevant_question_chain),
+    (lambda x: "no" in x["question_is_relevant"].lower(), irrelevant_question_chain),
     irrelevant_question_chain
 )
 
@@ -719,10 +706,19 @@ alternate_full_chain = (
     | alternate_branch_node
 )
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, let's try our `alternate_full_chain`.
 
 # COMMAND ----------
 
 display_chat(dialog["messages"], alternate_full_chain.invoke(dialog))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now, let's compare with our original `full_chain`. As you can see, model selection can result in differences in outputs. 
 
 # COMMAND ----------
 
@@ -736,4 +732,4 @@ display_chat(dialog["messages"], full_chain.invoke(dialog))
 # MAGIC
 # MAGIC In this Lab, you learned how to improve a chatbot, adding capabilities such as handling conversation history and retrieval using vector search. As you add even more capabilities and tune your prompts, it may become more difficult to evaluate your model performance in a repeatable way. Your new prompt may work well for what you tried to fix, but could also have impact on other questions.
 # MAGIC
-# MAGIC Open [03-Deploy-Model]($./03-Deploy-Model) to deploy your model endpoint
+# MAGIC Next, open [03-Deploy-Model]($./03-Deploy-Model) to deploy your model endpoint.
