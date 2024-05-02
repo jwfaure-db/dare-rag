@@ -35,11 +35,14 @@ workshop_prefix = "s3://awsdb-ws-"
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
 external_locations = spark.sql("SHOW EXTERNAL LOCATIONS").collect()
+email = spark.sql('select current_user() as user').collect()[0]['user']
+username = email.replace('.','_').replace('@','_')
 if len(external_locations) > 0:
     for row in external_locations:
-        if row.url.startswith(workshop_prefix):
+        if row.url.startswith(workshop_prefix) and row.url.endswith(username):
             S3_LOCATION = row.url
             print("Configured S3_LOCATION: " + S3_LOCATION)
+            
 
 # COMMAND ----------
 
