@@ -25,7 +25,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 langchain==0.1.5 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.18.0 cloudpickle==2.2.1 pydantic==2.5.2
+# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 langchain==0.1.5 databricks-vectorsearch==0.22 cloudpickle==2.2.1 databricks-sdk==0.18.0 cloudpickle==2.2.1 pydantic==2.5.2 sqlalchemy
 # MAGIC %pip install pip mlflow[databricks]==2.10.1
 # MAGIC dbutils.library.restartPython()
 
@@ -367,7 +367,7 @@ test_demo_permissions(workspace_url, secret_scope=scope_name, secret_key="rag_sp
 # from langchain.chains import RetrievalQA
 embedding_model = DatabricksEmbeddings(endpoint="databricks-bge-large-en")
 
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get("dbdemos", "rag_sp_token")
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(scope_name, "rag_sp_token")
 
 def get_retriever(persist_dir: str = None):
     os.environ["DATABRICKS_HOST"] = host
