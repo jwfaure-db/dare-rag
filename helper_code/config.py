@@ -30,16 +30,14 @@ bedrock_chat_model_endpoint_name = "claude_sonnet_" + aws_account_id
 # COMMAND ----------
 
 # Automate identification of external location for AWS-hosted events
-workshop_prefix = "s3://awsdb-ws-"
+workshop_prefix = "s3://db-workshop-" + aws_account_id
 
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
 external_locations = spark.sql("SHOW EXTERNAL LOCATIONS").collect()
-email = spark.sql('select current_user() as user').collect()[0]['user']
-username = email.replace('.','_').replace('@','_')
 if len(external_locations) > 0:
     for row in external_locations:
-        if row.url.startswith(workshop_prefix) and row.url.endswith(username):
+        if row.url.startswith(workshop_prefix)
             S3_LOCATION = row.url
             print("Configured S3_LOCATION: " + S3_LOCATION)
             
