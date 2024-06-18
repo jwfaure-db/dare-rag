@@ -37,7 +37,7 @@ spark = SparkSession.builder.getOrCreate()
 external_locations = spark.sql("SHOW EXTERNAL LOCATIONS").collect()
 if len(external_locations) > 0:
     for row in external_locations:
-        if row.url.startswith(workshop_prefix)
+        if row.url.startswith(workshop_prefix):
             S3_LOCATION = row.url
             print("Configured S3_LOCATION: " + S3_LOCATION)
             
