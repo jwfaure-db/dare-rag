@@ -13,9 +13,8 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.10.1 transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.1.5 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==2.5.2
+# MAGIC %pip install --quiet -U transformers==4.41.1 pypdf==4.1.0 langchain-text-splitters==0.2.0 databricks-vectorsearch mlflow tiktoken==0.7.0 torch==2.3.0 llama-index==0.10.43
 # MAGIC dbutils.library.restartPython()
-# MAGIC
 
 # COMMAND ----------
 
@@ -36,16 +35,19 @@
 
 # COMMAND ----------
 
-from mlflow.deployments import get_deploy_client
+import warnings
+from pypdf import PdfReader
 import io
-import databricks.sdk.service.catalog as c
-from databricks.sdk import WorkspaceClient
-from databricks.vector_search.client import VectorSearchClient
-from transformers import AutoTokenizer
-from llama_index import Document, set_global_tokenizer
-from llama_index.langchain_helpers.text_splitter import SentenceSplitter
 import re
-from unstructured.partition.auto import partition
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core import Document, set_global_tokenizer
+from transformers import AutoTokenizer
+from typing import Iterator
+from mlflow.deployments import get_deploy_client
+from databricks.vector_search.client import VectorSearchClient
+from databricks.sdk import WorkspaceClient
+import databricks.sdk.service.catalog as c
+
 
 spark.conf.set("spark.sql.conf.bucket", S3_LOCATION + "/documents")
 
@@ -127,41 +129,30 @@ df = (spark.readStream
 # MAGIC %md
 # MAGIC ### Extracting text from PDFs
 # MAGIC
-# MAGIC First, you extract text from PDFs. This can be tricky as some PDFs are difficult to handle and may have been saved as images. Here, you use the [unstructured](https://github.com/Unstructured-IO/unstructured) open-source library within a [User-Defined Function](https://docs.databricks.com/en/udf/index.html) (UDF).
-# MAGIC
-# MAGIC To extract our PDF, let's install the relevant libraries in your notebook compute nodes. *Note: The `install_ocr_nodes()` function is defined in the helper code.*
+# MAGIC First, you extract text from PDFs. This can be tricky as some PDFs are difficult to handle and may have been saved as images. Here, you use the [pypdf](https://github.com/py-pdf/pypdf) open-source library within a [User-Defined Function](https://docs.databricks.com/en/udf/index.html) (UDF).
 
 # COMMAND ----------
 
-install_ocr_on_nodes()
+def parse_bytes_pypdf(raw_doc_contents_bytes: bytes):
+    try:
+        pdf = io.BytesIO(raw_doc_contents_bytes)
+        reader = PdfReader(pdf)
+        parsed_content = [page_content.extract_text() for page_content in reader.pages]
+        return "\n".join(parsed_content)
+    except Exception as e:
+        warnings.warn(f"Exception {e} has been thrown during parsing")
+        return None
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC Now, let's create the text extraction function for your PDFs:
-
-# COMMAND ----------
-
-def extract_doc_text(x: bytes) -> str:
-    # Read files and extract the values with unstructured
-    sections = partition(file=io.BytesIO(x))
-
-    def clean_section(txt):
-        txt = re.sub(r'\n', '', txt)
-        return re.sub(r' ?\.', '.', txt)
-    # Default split is by section of document, concatenate them all together because we want to split by sentence instead.
-    return "\n".join([clean_section(s.text) for s in sections])
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Next, let's test the text extraction function with a single PDF file:
+# MAGIC %md 
+# MAGIC Let's start by extracting text from our PDF.
 
 # COMMAND ----------
 
 with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main/llm/databricks-pdf-documentation/Databricks-Customer-360-ebook-Final.pdf?raw=true') as pdf:
-    doc = extract_doc_text(pdf.content)
-    print(doc)
+  doc = parse_bytes_pypdf(pdf.content)  
+  print(doc)
 
 # COMMAND ----------
 
@@ -181,22 +172,23 @@ with requests.get('https://github.com/databricks-demos/dbdemos-dataset/blob/main
 
 # COMMAND ----------
 
-
+# Reduce the arrow batch size as our PDF can be big in memory
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
 
 @pandas_udf("array<string>")
 def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
-    # set llama2 as tokenizer to match our model size (will stay below BGE 1024 limit)
+    #set llama2 as tokenizer to match our model size (will stay below gte 1024 limit)
     set_global_tokenizer(
-        AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+      AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
     )
-    # Sentence splitter from llama_index to split on sentences
-    splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
-
+    #Sentence splitter from llama_index to split on sentences
+    splitter = SentenceSplitter(chunk_size=500, chunk_overlap=10)
     def extract_and_split(b):
-        txt = extract_doc_text(b)
-        nodes = splitter.get_nodes_from_documents([Document(text=txt)])
-        return [n.text for n in nodes]
+      txt = parse_bytes_pypdf(b)
+      if txt is None:
+        return []
+      nodes = splitter.get_nodes_from_documents([Document(text=txt)])
+      return [n.text for n in nodes]
 
     for x in batch_iter:
         yield x.apply(extract_and_split)
@@ -225,11 +217,13 @@ def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
 
 # COMMAND ----------
 
-# bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api.
+from mlflow.deployments import get_deploy_client
+
+# gte-large-en Foundation models are available using the /serving-endpoints/databricks-gtegte-large-en/invocations api. 
 deploy_client = get_deploy_client("databricks")
 
-embeddings = deploy_client.predict(
-    endpoint="databricks-bge-large-en", inputs={"input": ["What is Apache Spark?"]})
+## NOTE: if you change your embedding model here, make sure you change it in the query step too
+embeddings = deploy_client.predict(endpoint="databricks-gte-large-en", inputs={"input": ["What is Apache Spark?"]})
 pprint(embeddings)
 
 # COMMAND ----------
@@ -260,17 +254,14 @@ pprint(embeddings)
 def get_embedding(contents: pd.Series) -> pd.Series:
     import mlflow.deployments
     deploy_client = mlflow.deployments.get_deploy_client("databricks")
-
     def get_embeddings(batch):
-        # Note: this will fail if an exception is thrown during embedding creation (add try/except if needed)
-        response = deploy_client.predict(
-            endpoint="databricks-bge-large-en", inputs={"input": batch})
+        #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+        response = deploy_client.predict(endpoint="databricks-gte-large-en", inputs={"input": batch})
         return [e['embedding'] for e in response.data]
 
     # Splitting the contents into batches of 150 items each, since the embedding model takes at most 150 inputs per request.
     max_batch_size = 150
-    batches = [contents.iloc[i:i + max_batch_size]
-               for i in range(0, len(contents), max_batch_size)]
+    batches = [contents.iloc[i:i + max_batch_size] for i in range(0, len(contents), max_batch_size)]
 
     # Process each batch and collect the results
     all_embeddings = []
@@ -335,6 +326,7 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+from databricks.vector_search.client import VectorSearchClient
 vsc = VectorSearchClient(disable_notice=True)
 
 if len(vsc.list_endpoints()) == 0 or VECTOR_SEARCH_ENDPOINT_NAME not in [e['name'] for e in vsc.list_endpoints()['endpoints']]:
@@ -358,6 +350,9 @@ print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
 # MAGIC Let's create the self-managed vector search using our endpoint:
 
 # COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+import databricks.sdk.service.catalog as c
 
 # The table we'd like to index
 source_table_fullname = f"{catalog}.{db}.llm_pdf_documentation"
@@ -395,7 +390,7 @@ wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
 question = "How can I track billing usage on my workspaces?"
 
-response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
+response = deploy_client.predict(endpoint="databricks-gte-large-en", inputs={"input": [question]})
 embeddings = [e['embedding'] for e in response.data]
 
 results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(query_vector=embeddings[0], columns=["url", "content"], num_results=1)
@@ -407,7 +402,7 @@ pprint(docs)
 
 # MAGIC %md
 # MAGIC ## 1.6 [Optional] Using Amazon Titan Text Embeddings
-# MAGIC Previously, you used BGE as an embeddings model. Let's explore the impact of using a different embeddings model. 
+# MAGIC Previously, you used GTE as an embeddings model. Let's explore the impact of using a different embeddings model. 
 # MAGIC
 # MAGIC Let's try an [external model](https://docs.databricks.com/en/generative-ai/external-models/index.html) `titan-embed-g1-text-02` from Amazon Bedrock. To deploy, you use AWS Credentials securely configured in [secret scopes](https://docs.databricks.com/en/security/secrets/secret-scopes.html).
 # MAGIC
@@ -447,13 +442,13 @@ else:
 
 # COMMAND ----------
 
-bge_embeddings = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": ["What is Apache Spark?"]})
+gte_embeddings = deploy_client.predict(endpoint="databricks-gte-large-en", inputs={"input": ["What is Apache Spark?"]})
 titan_embeddings = deploy_client.predict(endpoint=embeddings_model_endpoint_name, inputs={"input": "What is Apache Spark?"})
 
 # pprint(titan_embeddings)
 
 print("titan embeddings model dimensions: " + str(len(titan_embeddings.get('data')[0].get('embedding'))))
-print("bge embeddings model dimensions: " + str(len(bge_embeddings.get('data')[0].get('embedding'))))
+print("bge embeddings model dimensions: " + str(len(gte_embeddings.get('data')[0].get('embedding'))))
 
 # COMMAND ----------
 
